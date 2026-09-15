@@ -38,8 +38,30 @@
             if (byPid[pid]) _ctx.projLines[w + '|' + pid] = byPid[pid];
         }
     }
+    // Sleeper returns a row for EVERY player, so the row existing proves
+    // nothing. Players it is not projecting come back carrying only a draft-ADP
+    // placeholder (adp_dd_ppr: 1000) and no projected volume whatsoever. A line
+    // only counts as published when it actually projects something to happen.
     function projLine(pid, week) {
-        return _ctx.projLines[(Number(week) || 0) + '|' + pid] || null;
+        const line = _ctx.projLines[(Number(week) || 0) + '|' + pid] || null;
+        if (!line) return null;
+        const vol = Number(line.pts_ppr) || Number(line.pts_std) || Number(line.pts_half_ppr)
+            || Number(line.pass_att) || Number(line.rush_att) || Number(line.rec_tgt)
+            || Number(line.rec) || Number(line.idp_tkl) || Number(line.fga) || Number(line.xpm) || 0;
+        return vol > 0 ? line : null;
+    }
+    // The latest week we actually hold published Sleeper lines for, or 0 when
+    // none have loaded yet. Consumers that must not guess (rest-of-season
+    // value, waiver ranking) key off this instead of the calendar week, so
+    // they never ask for a week Sleeper has not published and then quietly
+    // fill the silence with an estimate.
+    function loadedProjWeek() {
+        let best = 0;
+        for (const k of Object.keys(_ctx.projLines)) {
+            const w = Number(String(k).split('|')[0]);
+            if (w > best) best = w;
+        }
+        return best;
     }
     function teamWeekCtx(team, week) {
         return _ctx.byTeamWeek[`${String(team || '').toUpperCase()}|${week}`] || null;
@@ -171,9 +193,15 @@
     }
 
     // Project one player for a given week, scored through `scoring`.
-    function projectPlayer(pid, { playersData, statsData, priorData, scoring, week }) {
+    // requireSleeper: return null unless Sleeper has published a real weekly
+    // projection for this player. Callers that rank, price or recommend must
+    // pass it — an estimate built from last season is not a projection, and
+    // Sleeper declining to publish one is itself the answer (the player is not
+    // in a role worth projecting).
+    function projectPlayer(pid, { playersData, statsData, priorData, scoring, week, requireSleeper }) {
         const ss = SS();
         if (!ss || !pid) return null;
+        if (requireSleeper && !projLine(pid, week)) return null;
         const player = (playersData && playersData[pid]) || null;
         const pos = (App.normPos && App.normPos(player && player.position)) || (player && player.position) || '';
         const season = (statsData && statsData[pid]) || null;
@@ -202,6 +230,12 @@
             roleNote: ctx ? ctx.roleNote : '',
         });
         const scored = ss.scoreProjection(proj, scoring);
+        // Every projection now declares where its number came from. 'estimate'
+        // is the home-grown line built from season stats + form; it is a guess,
+        // and callers that must not guess (waiver ranking, rest-of-season value)
+        // are required to check this before using the number. Upgraded to
+        // 'sleeper' below when Sleeper has actually published a line.
+        if (scored) scored.projSource = 'estimate';
 
         // ── One voice: prefer Sleeper's published weekly projection ──
         // The home-grown baseline (season stats + form) is our progressive-
@@ -293,7 +327,7 @@
     }
 
     App.WeeklyProj = App.WeeklyProj || {
-        setContext, setProjections, projLine, currentWeek, fantasyWeek, recentPPG, weeklyHistory, formStats, buildBaseline,
+        setContext, setProjections, projLine, loadedProjWeek, currentWeek, fantasyWeek, recentPPG, weeklyHistory, formStats, buildBaseline,
         projectPlayer, projectRoster, optimalForRoster,
         objectiveForMode, modeFor,
         _ctx,
