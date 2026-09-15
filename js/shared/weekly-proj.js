@@ -38,6 +38,22 @@
             if (byPid[pid]) _ctx.projLines[w + '|' + pid] = byPid[pid];
         }
     }
+    // Any field whose presence means Sleeper is actually projecting production.
+    // Deliberately broad: a quarterback line can carry passing yards and
+    // touchdowns without an attempt count, and a kicker only field goals, so
+    // testing a narrow set would throw away real projections. Scoring totals,
+    // volume and yardage all count. Draft-ADP placeholders do not appear here,
+    // which is the whole point.
+    const PUBLISHED_VOLUME_FIELDS = [
+        'pts_ppr', 'pts_half_ppr', 'pts_std',
+        'pass_att', 'pass_yd', 'pass_td', 'pass_cmp',
+        'rush_att', 'rush_yd', 'rush_td',
+        'rec', 'rec_tgt', 'rec_yd', 'rec_td',
+        'fga', 'fgm', 'xpm',
+        'idp_tkl', 'idp_tkl_solo', 'idp_sack', 'idp_int', 'idp_pass_def',
+        'def_st_td', 'def_td', 'sack', 'int', 'tkl',
+    ];
+
     // Sleeper returns a row for EVERY player, so the row existing proves
     // nothing. Players it is not projecting come back carrying only a draft-ADP
     // placeholder (adp_dd_ppr: 1000) and no projected volume whatsoever. A line
@@ -45,10 +61,10 @@
     function projLine(pid, week) {
         const line = _ctx.projLines[(Number(week) || 0) + '|' + pid] || null;
         if (!line) return null;
-        const vol = Number(line.pts_ppr) || Number(line.pts_std) || Number(line.pts_half_ppr)
-            || Number(line.pass_att) || Number(line.rush_att) || Number(line.rec_tgt)
-            || Number(line.rec) || Number(line.idp_tkl) || Number(line.fga) || Number(line.xpm) || 0;
-        return vol > 0 ? line : null;
+        for (const f of PUBLISHED_VOLUME_FIELDS) {
+            if (Number(line[f]) > 0) return line;
+        }
+        return null;
     }
     // The latest week we actually hold published Sleeper lines for, or 0 when
     // none have loaded yet. Consumers that must not guess (rest-of-season
