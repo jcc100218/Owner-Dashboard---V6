@@ -27,6 +27,11 @@
 // Usage:  node scripts/publish-lab.cjs [--no-build]
 //   LAB_DIR             path to the Lab checkout   (default ../DHQ-Web-Page)
 //   DHQ_SHARED_SOURCE   path to DHQ-Shared         (default ../DHQ-Shared)
+//                       — check out the engine branch under test there; the
+//                       Lab then carries that branch while the website keeps
+//                       deploying from DHQ-Shared main
+//   LAB_TAG             optional marker appended to the build tag, e.g.
+//                       LAB_TAG=LAB33 renders "b125 · LAB33"
 // --no-build skips steps 1-2 and publishes the dist-deploy/ already on disk.
 //
 // The build stamps js/shared/shared-loader.js in place (that stamp is what
@@ -151,7 +156,8 @@ function labifyAppPage(html, name) {
   const tagRe = /(<div id="dhq-build-tag"[^>]*>)([^<]*)(<\/div>)/;
   if (!tagRe.test(html)) fail(name + ': build tag not found');
   html = html.replace(tagRe, function (_, open, text, close) {
-    return open.replace('rgba(255,255,255,0.30)', 'rgba(212,175,55,0.75)') + text.trim() + ' · LAB' + close;
+    const mark = process.env.LAB_TAG ? String(process.env.LAB_TAG).trim() : 'LAB';
+    return open.replace('rgba(255,255,255,0.30)', 'rgba(212,175,55,0.75)') + text.trim() + ' · ' + mark + close;
   });
   return html;
 }
