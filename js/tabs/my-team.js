@@ -1819,8 +1819,11 @@ function MyTeamTab({
       const rosters = currentLeague.rosters || [];
       const users = window.S?.leagueUsers || currentLeague.users || [];
       const out = [];
-      for (let yr = season; yr <= season + 2; yr++) {
-        if (spentPickSeasons.has(yr)) continue; // that draft has run — those picks are gone
+      // Rolling three-year window: once a season's draft has run, those picks
+      // are gone and the window slides forward (2026 drafted → 2027-2029).
+      let firstYear = season;
+      while (spentPickSeasons.has(firstYear)) firstYear++;
+      for (let yr = firstYear; yr <= firstYear + 2; yr++) {
         for (let rd = 1; rd <= draftRounds; rd++) {
           const tradedAway = tradedPicks.find(p => parseInt(p.season, 10) === yr && p.round === rd && p.roster_id === myRid && p.owner_id !== myRid);
           const acquired = tradedPicks.filter(p => parseInt(p.season, 10) === yr && p.round === rd && p.owner_id === myRid && p.roster_id !== myRid);

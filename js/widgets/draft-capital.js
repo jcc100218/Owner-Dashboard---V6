@@ -90,8 +90,11 @@
         const picks = React.useMemo(() => {
             const inv = [];
             const pvFn = window.App?.PlayerValue?.getPickValue;
-            for (let yr = parseInt(season); yr <= parseInt(season) + 2; yr++) {
-                if (spentSeasons.has(yr)) continue; // that draft has run — those picks are gone
+            // Rolling three-year window: a drafted season's picks are gone and
+            // the window slides forward (2026 drafted → 2027-2029).
+            let firstYear = parseInt(season);
+            while (spentSeasons.has(firstYear)) firstYear++;
+            for (let yr = firstYear; yr <= firstYear + 2; yr++) {
                 for (let rd = 1; rd <= draftRounds; rd++) {
                     // tradedAway and acquired are independent — dealing your own
                     // pick in a round must NOT drop picks acquired in that same
@@ -169,8 +172,9 @@
             const leagueSeason = parseInt(currentLeague?.season) || new Date().getFullYear();
             return allRosters.map(r => {
                 let cap = 0;
-                for (let yr = leagueSeason; yr <= leagueSeason + 2; yr++) {
-                    if (spentSeasons.has(yr)) continue; // spent picks are nobody's capital
+                let firstYear = leagueSeason;
+                while (spentSeasons.has(firstYear)) firstYear++; // spent picks are nobody's capital; the window slides
+                for (let yr = firstYear; yr <= firstYear + 2; yr++) {
                     for (let rd = 1; rd <= draftRounds; rd++) {
                         const pv = typeof window.getIndustryPickValue === 'function'
                             ? window.getIndustryPickValue((rd - 1) * totalTeams + Math.ceil(totalTeams / 2), totalTeams, draftRounds)
