@@ -33,6 +33,7 @@ function LineupTab({
         try {
             return WP.optimalForRoster(myRoster, currentLeague, {
                 playersData, statsData, priorData: stats2025Data,
+                sleeperOnly: true, // the truth law: Sleeper's published line or nothing
             });
         } catch (e) { if (window.wrLog) window.wrLog('lineup.compute', e); return null; }
     }, [myRoster, currentLeague, playersData, statsData, timeRecomputeTs, ctxTick]);
@@ -143,7 +144,7 @@ function LineupTab({
         if (!WP || !oppRosterId || !currentLeague) return null;
         const oppRoster = (currentLeague.rosters || []).find(r => String(r.roster_id) === String(oppRosterId));
         if (!oppRoster) return null;
-        try { return { roster: oppRoster, res: WP.optimalForRoster(oppRoster, currentLeague, { playersData, statsData, priorData: stats2025Data, objective: 'median' }) }; }
+        try { return { roster: oppRoster, res: WP.optimalForRoster(oppRoster, currentLeague, { playersData, statsData, priorData: stats2025Data, objective: 'median', sleeperOnly: true }) }; }
         catch (e) { if (window.wrLog) window.wrLog('lineup.oppProject', e); return null; }
     }, [oppRosterId, currentLeague, playersData, statsData, timeRecomputeTs, ctxTick]);
 
@@ -1221,7 +1222,11 @@ function LineupTab({
             {/* Unified interactive lineup table */}
             <div style={{ background: PANEL, border: `1px solid ${LINE}`, borderRadius: '6px', overflow: 'hidden' }}>
                 <div style={{ padding: '10px 14px', borderBottom: `1px solid ${LINE}`, display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '10px', flexWrap: 'wrap' }}>
-                    <span style={{ fontSize: '0.7rem', letterSpacing: '0.08em', color: SILVER, fontWeight: 600 }}>STARTING LINEUP · tap a slot to set it</span>
+                    <span style={{ fontSize: '0.7rem', letterSpacing: '0.08em', color: SILVER, fontWeight: 600 }}>STARTING LINEUP · tap a slot to set it
+                        <span style={{ marginLeft: '10px', color: result.sleeperLines ? GREEN : AMBER, fontWeight: 600, letterSpacing: '0.04em' }}>
+                            {result.sleeperLines ? `· Sleeper week ${result.week} projections` : `· waiting on Sleeper's week ${result.week} projections`}
+                        </span>
+                    </span>
                     <div style={{ display: 'flex', gap: '4px', alignItems: 'center' }}>
                         <span style={{ fontSize: fz('0.58rem'), color: SILVER, letterSpacing: '0.05em', marginRight: '2px' }}>FORM</span>
                         {[['L3', 3], ['L5', 5], ['L8', 8], ['SZN', 'season']].map(opt => (

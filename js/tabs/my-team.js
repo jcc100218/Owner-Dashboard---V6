@@ -155,7 +155,7 @@ function MyTeamTab({
     const WP = window.App && window.App.WeeklyProj;
     if (!WP || !myRoster || !currentLeague) return null;
     try {
-      const res = WP.optimalForRoster(myRoster, currentLeague, { playersData, statsData, priorData: stats2025Data });
+      const res = WP.optimalForRoster(myRoster, currentLeague, { playersData, statsData, priorData: stats2025Data, sleeperOnly: true });
       return { res, starterSet: new Set((res.optimal.starters || []).map(s => String(s.pid))), objective: res.objective };
     } catch (e) { if (window.wrLog) window.wrLog('myteam.weeklyProj', e); return null; }
   }, [myRoster, currentLeague, playersData, statsData, stats2025Data, timeRecomputeTs, projTick]);
