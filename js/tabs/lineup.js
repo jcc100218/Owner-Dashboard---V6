@@ -488,11 +488,13 @@ function LineupTab({
         if (!isOptimal && recIn.has(id)) return 'rec';
         return null;
     };
-    const shadeTag = (shade) => shade === 'out'
-        ? <span style={{ color: RED, marginLeft: '6px', fontSize: fz('0.58rem'), letterSpacing: '0.06em' }}>OUT</span>
-        : shade === 'in'
-            ? <span style={{ color: GREEN, marginLeft: '6px', fontSize: fz('0.58rem'), letterSpacing: '0.06em' }}>IN</span>
-            : null;
+    // The verdict pill beside the name (desktop table). Starters: red
+    // "recommend replacing" / green "swapped in". Bench rows: red
+    // "recommended" / green "benched".
+    const starterChip = (shade) => shade === 'out' ? { label: 'Recommend replacing', color: RED }
+        : shade === 'in' ? { label: 'Swapped in', color: GREEN } : null;
+    const benchChip = (shade) => shade === 'rec' ? { label: 'Recommended', color: RED }
+        : shade === 'moved' ? { label: 'Benched', color: GREEN } : null;
     // Phone cards: AssetRow forwards `style` to its root, so a shaded card
     // restates the root look with the tint and a matching border.
     const shadeCardStyle = (shade) => shade === 'out'
@@ -521,7 +523,11 @@ function LineupTab({
     }
 
     // ── Player field cells (shared by slot rows, picker rows, bench rows) ──
-    function PlayerCells({ pid }) {
+    // chip: an optional verdict pill rendered right after the player's name
+    // ({ label, color }) — the optimizer's "recommend replacing" / "swapped in"
+    // reads beside the name, never in the narrow slot column where it collided
+    // with long slot labels (owner ask 2026-09-17).
+    function PlayerCells({ pid, chip }) {
         if (!pid) {
             return (<React.Fragment>
                 <span style={{ color: SILVER, opacity: 0.6, fontStyle: 'italic' }}>Empty — tap to set</span>
@@ -541,6 +547,7 @@ function LineupTab({
         return (<React.Fragment>
             <span style={{ minWidth: 0, overflow: 'hidden' }}>
                 <span style={{ color: unavail ? SILVER : TEXT, fontWeight: 500, textDecoration: unavail ? 'line-through' : 'none' }}>{meta.name}</span>
+                {chip && chip.label ? <span style={{ display: 'inline-block', verticalAlign: 'middle', marginLeft: '8px', padding: '1px 7px', borderRadius: '4px', border: '1px solid ' + chip.color, color: chip.color, fontSize: fz('0.56rem'), fontWeight: 700, letterSpacing: '0.08em', textTransform: 'uppercase', whiteSpace: 'nowrap' }}>{chip.label}</span> : null}
                 <span style={{ color: SILVER, fontSize: '0.7rem', marginLeft: '6px' }}>{meta.pos}{meta.team ? ' · ' + meta.team : ''}</span>
                 {opp && opp.abbr ? <span style={{ color: SILVER, fontSize: '0.66rem', marginLeft: '6px', opacity: 0.85 }}>{opp.home ? 'vs ' : '@ '}{opp.abbr}</span> : null}
                 {wxTag(weather)}
@@ -825,7 +832,7 @@ function LineupTab({
             const tag = [slotLabel, meta.team || 'FA', opp && opp.abbr ? (opp.home ? 'vs ' : '@ ') + opp.abbr : null, status || null].filter(Boolean).join(' · ');
             const atRisk = !!status || (proj && proj.available === false);
             const shade = starterShade(pid);
-            return <AssetRow key={sl.idx} pos={meta.pos || '?'} name={meta.name} tag={(shade === 'out' ? 'OUT · ' : shade === 'in' ? 'IN · ' : '') + tag}
+            return <AssetRow key={sl.idx} pos={meta.pos || '?'} name={meta.name} tag={(shade === 'out' ? 'RECOMMEND REPLACING · ' : shade === 'in' ? 'SWAPPED IN · ' : '') + tag}
                 slots={[{ label: 'PROJ', value: pts ? (pts[objective] || 0).toFixed(1) : '—' }]}
                 verdict={pro ? gradeChip((proj && proj.matchupGrade) || '—') : null}
                 accent={open ? 'gold' : atRisk ? 'risk' : undefined}
@@ -849,7 +856,7 @@ function LineupTab({
             const fs = formOf(epid);
             const bshade = isCur ? null : benchShade(epid);
             return <AssetRow key={epid} pos={meta.pos || '?'} name={meta.name}
-                tag={[isCur ? 'IN' : bshade === 'rec' ? 'START' : bshade === 'moved' ? 'BENCHED' : null, meta.team || 'FA', opp && opp.abbr ? (opp.home ? 'vs ' : '@ ') + opp.abbr : null, status || null].filter(Boolean).join(' · ')}
+                tag={[isCur ? 'IN' : bshade === 'rec' ? 'RECOMMENDED' : bshade === 'moved' ? 'BENCHED' : null, meta.team || 'FA', opp && opp.abbr ? (opp.home ? 'vs ' : '@ ') + opp.abbr : null, status || null].filter(Boolean).join(' · ')}
                 slots={[{ label: 'PROJ', value: pts ? (pts[objective] || 0).toFixed(1) : '—' }, { label: formWinLabel, value: fs ? fs.rollingPPG.toFixed(1) : '—', tone: 'mute' }]}
                 verdict={pro ? gradeChip((proj && proj.matchupGrade) || '—') : null}
                 accent={isCur ? 'gold' : undefined}
@@ -1231,8 +1238,8 @@ function LineupTab({
                         <div key={sl.idx} style={{ borderBottom: `1px solid ${LINE}` }}>
                             <div onClick={() => setOpenSlot(open ? null : sl.idx)}
                                 style={{ display: 'grid', gridTemplateColumns: GRID, gap: '8px', padding: isPhone ? '11px 14px' : '9px 14px', minHeight: isPhone ? '44px' : undefined, alignItems: 'center', cursor: 'pointer', background: open ? 'var(--acc-fill2, rgba(212,175,55,0.08))' : starterShade(pid) === 'out' ? RED_BG : starterShade(pid) === 'in' ? GREEN_BG : 'transparent' }}>
-                                <span style={{ fontSize: '0.68rem', fontWeight: 700, color: GOLD, letterSpacing: '0.04em' }}>{sl.slotName.replace('_', ' ')}<span style={{ color: SILVER, marginLeft: '4px', fontSize: fz('0.6rem') }}>{open ? '▾' : '▸'}</span>{shadeTag(starterShade(pid))}</span>
-                                <PlayerCells pid={pid} />
+                                <span style={{ fontSize: '0.68rem', fontWeight: 700, color: GOLD, letterSpacing: '0.04em' }}>{sl.slotName.replace('_', ' ')}<span style={{ color: SILVER, marginLeft: '4px', fontSize: fz('0.6rem') }}>{open ? '▾' : '▸'}</span></span>
+                                <PlayerCells pid={pid} chip={starterChip(starterShade(pid))} />
                             </div>
                             {open ? (
                                 <div style={{ background: 'var(--ov-2, rgba(255,255,255,0.03))', borderTop: `1px solid ${LINE}`, padding: '4px 0' }}>
@@ -1254,8 +1261,8 @@ function LineupTab({
                                         return (
                                             <div key={epid} onClick={() => { setWorkingAssign(w => ({ ...w, [sl.idx]: epid })); setOpenSlot(null); }}
                                                 style={{ display: 'grid', gridTemplateColumns: GRID, gap: '8px', padding: isPhone ? '10px 14px' : '7px 14px', minHeight: isPhone ? '44px' : undefined, alignItems: 'center', cursor: 'pointer', background: isCur ? 'rgba(212,175,55,0.10)' : benchShade(epid) === 'rec' ? RED_BG : benchShade(epid) === 'moved' ? GREEN_BG : 'transparent', borderLeft: isCur ? `3px solid ${GOLD}` : benchShade(epid) === 'rec' ? `3px solid ${RED}` : benchShade(epid) === 'moved' ? `3px solid ${GREEN}` : '3px solid transparent' }}>
-                                                <span style={{ fontSize: fz('0.6rem'), color: isCur ? GOLD : benchShade(epid) === 'rec' ? RED : benchShade(epid) === 'moved' ? GREEN : SILVER, fontWeight: 700 }}>{isCur ? 'IN' : benchShade(epid) === 'rec' ? 'START' : benchShade(epid) === 'moved' ? 'BENCHED' : ''}</span>
-                                                <PlayerCells pid={epid} />
+                                                <span style={{ fontSize: fz('0.6rem'), color: isCur ? GOLD : SILVER, fontWeight: 700 }}>{isCur ? 'IN' : ''}</span>
+                                                <PlayerCells pid={epid} chip={isCur ? null : benchChip(benchShade(epid))} />
                                             </div>
                                         );
                                     })}
