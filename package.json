@@ -1,7 +1,7 @@
 {
   "name": "owner-dashboard-v6",
   "version": "1.0.0",
-  "description": "Dynasty HQ web app (web-only) — draft war room, earnings tracking, free agent targets",
+  "description": "Dynasty HQ web app (web-only) \u2014 draft war room, earnings tracking, free agent targets",
   "main": "index.html",
   "scripts": {
     "test": "node tests/run.js && node tests/season-odds-engines.js && node tests/faab-engine.js && node tests/chopped.js && node tests/chop-odds.js",
@@ -22,7 +22,8 @@
     "test:connect": "node tests/public-connect.cjs && node tests/public-connect-browser.cjs",
     "test:web-billing": "node tests/web-billing-client.cjs && node tests/web-billing-browser.cjs",
     "test:trade-picks": "node tests/trade-pick-inventory.cjs && node tests/trade-pick-browser.cjs",
-    "test:public-portfolio": "node tests/public-portfolio.cjs && node tests/public-portfolio-browser.cjs"
+    "test:public-portfolio": "node tests/public-portfolio.cjs && node tests/public-portfolio-browser.cjs",
+    "test:yahoo-transactions": "node tests/yahoo-transaction-feed.cjs && node tests/yahoo-transaction-browser.cjs"
   },
   "keywords": [
     "fantasy",

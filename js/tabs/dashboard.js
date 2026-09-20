@@ -1177,7 +1177,7 @@ function DashboardPanel({
                 <div style={{ flex: 1, minHeight: 0, overflow: 'auto' }}>
                 <window.WrTxnFeedStatus status={transactionStatus} onRetry={retryTransactions} retrying={transactionRetrying} />
                 {(!transactions || transactions.length === 0) ? (
-                    transactionStatus ? (transactionStatus.status === 'ready' ? <div style={{ fontSize: '14px', color: S }}>No completed trades returned by ESPN.</div> : null) : <SkeletonRows count={size === 'narrow' ? 8 : size === 'lg' ? 5 : size === 'slim' ? 4 : 2} />
+                    transactionStatus ? (transactionStatus.status === 'ready' ? <div style={{ fontSize: '14px', color: S }}>{window.App.TransactionFeed.emptyMessage(transactionStatus)}</div> : null) : <SkeletonRows count={size === 'narrow' ? 8 : size === 'lg' ? 5 : size === 'slim' ? 4 : 2} />
                 ) : typeof window.WrTxnTickerList === 'function' ? (
                     /* Rows live in the shared widget (js/widgets/txn-ticker.js) so the
                        Free Agency ticker is a direct lift of this one. Tapping a row
@@ -1268,7 +1268,7 @@ function DashboardPanel({
                     <div style={{ flex: 1, minHeight: 0, overflow: 'auto', padding: '10px 14px' }}>
                         <window.WrTxnFeedStatus status={transactionStatus} onRetry={retryTransactions} retrying={transactionRetrying} />
                         {txns.length === 0 ? (
-                            <div style={{ color: S, fontSize: '0.85rem', padding: '20px', textAlign: 'center' }}>{transactionStatus ? (transactionStatus.status === 'ready' ? 'No completed trades returned by ESPN.' : 'Trade history is not confirmed.') : 'No transactions yet.'}</div>
+                            <div style={{ color: S, fontSize: '0.85rem', padding: '20px', textAlign: 'center' }}>{transactionStatus ? (transactionStatus.status === 'ready' ? window.App.TransactionFeed.emptyMessage(transactionStatus) : 'Trade history is not confirmed.') : 'No transactions yet.'}</div>
                         ) : txns.map((txn, ti) => (
                             <div key={ti} style={{ padding: '11px 0', borderBottom: ti === txns.length - 1 ? 'none' : '1px solid var(--ov-3, rgba(255,255,255,0.06))' }}>
                                 <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '7px', flexWrap: 'wrap' }}>

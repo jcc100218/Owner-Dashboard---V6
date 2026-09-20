@@ -1055,6 +1055,14 @@
         const [transactionStatus, setTransactionStatus] = useState(null);
         const [transactionRetrying, setTransactionRetrying] = useState(false);
         const transactionRetryRef = useRef(false);
+        const yahooTransactionContextRef = useRef(null);
+        const yahooTransactionViewKey = currentLeague._yahoo ? String(currentLeague.id || currentLeague.league_id) + ':' + String(currentLeague.season || '') : null;
+        if (yahooTransactionViewKey && yahooTransactionContextRef.current?.viewKey !== yahooTransactionViewKey) {
+            try {
+                const captured = window.Yahoo?.provider?.captureContext?.(currentLeague);
+                yahooTransactionContextRef.current = { viewKey: yahooTransactionViewKey, isCurrent: () => !!captured?.isCurrent() };
+            } catch { yahooTransactionContextRef.current = { viewKey: yahooTransactionViewKey, isCurrent: () => false }; }
+        }
         const [rankedTeams, setRankedTeams] = useState([]);
         const [dhqStatus, setDhqStatus] = useState({ loading: false, step: '', progress: 0 });
         const [loadStage, setLoadStage] = useState('');
@@ -1864,9 +1872,9 @@
         async function loadLeagueDetails(options = {}) {
             // New full load supersedes any in-flight background revalidation.
             const loadSeq = ++loadSeqRef.current;
-            const espnCurrent = () => !currentLeague._espn || window.App.EspnHub?.isLeagueCurrent(currentLeague);
+            const espnCurrent = () => currentLeague._yahoo ? !!yahooTransactionContextRef.current?.isCurrent() : (!currentLeague._espn || window.App.EspnHub?.isLeagueCurrent(currentLeague));
             try {
-                if (!espnCurrent()) throw new Error('Your ESPN account or connection changed. Return to the hub and reload.');
+                if (!espnCurrent()) throw new Error('Your league account or connection changed. Return to the hub and reload.');
                 // Clear assessment caches for THIS league so health scores compute fresh.
                 // Key by league ID — switching back to a previously-loaded league can
                 // reuse its cache if the underlying data hasn't changed.
@@ -2011,8 +2019,8 @@
                             throw new Error('Background revalidation returned empty rosters/users — keeping current data');
                         }
                         applyHydrated(bgHydrated, { provider, sleeperPlayers: bgPlayers, nflState: bgNfl, currentWeek: bgWeek, myRosterData, background: true });
-                        if (provider.id === 'espn' && window.S?.transactionStatus?.status !== 'ready') {
-                            throw new Error('ESPN trade feed is incomplete — keeping its last confirmed data');
+                        if (['espn', 'yahoo'].includes(provider.id) && window.S?.transactionStatus?.status !== 'ready') {
+                            throw new Error(provider.displayName + ' trade feed is incomplete — keeping its last confirmed data');
                         }
                     });
                 }
@@ -2097,13 +2105,18 @@
         }
 
         async function retryTransactions() {
-            if (transactionRetryRef.current || !window.App.EspnHub?.isLeagueCurrent(currentLeague)) return;
+            const isCurrent = () => currentLeague._yahoo ? !!yahooTransactionContextRef.current?.isCurrent() : !!window.App.EspnHub?.isLeagueCurrent(currentLeague);
+            if (transactionRetryRef.current) return;
+            if (!isCurrent()) {
+                if (currentLeague._yahoo) setError('Your Yahoo account or connection changed. Return to the hub and reopen this league.');
+                return;
+            }
             transactionRetryRef.current = true;
             setTransactionRetrying(true);
             try { await loadLeagueDetails({ transactionsOnly: true }); }
             finally {
                 transactionRetryRef.current = false;
-                if (window.App.EspnHub?.isLeagueCurrent(currentLeague)) setTransactionRetrying(false);
+                if (isCurrent()) setTransactionRetrying(false);
             }
         }
 
@@ -2117,6 +2130,7 @@
         // (loadLeagueDetails' catch sets the error UI; WR.Sync logs).
         function applyHydrated(hydrated, { provider, sleeperPlayers, nflState, currentWeek, myRosterData, background = false }) {
             if (currentLeague._espn && !window.App.EspnHub?.isLeagueCurrent(currentLeague)) return;
+            if (currentLeague._yahoo && !yahooTransactionContextRef.current?.isCurrent()) return;
             // Pull enrichment out of _extras (Sleeper only — others empty)
             const stats       = hydrated._extras?.stats       || {};
             const projections = hydrated._extras?.projections || {};
@@ -2389,8 +2403,8 @@
             // Deduplicate by timestamp so the provider's recent txns
             // aren't doubled.
             // Legacy LI has no league/account tag on its tradeHistory. It cannot
-            // certify an ESPN feed or fill an unavailable response for this view.
-            if (provider.id !== 'espn' && window.App?.LI?.tradeHistory?.length > 0) {
+            // certify a scoped provider feed or fill an unavailable response for this view.
+            if (!['espn', 'yahoo'].includes(provider.id) && window.App?.LI?.tradeHistory?.length > 0) {
                 const existingTradeTs = new Set(allTxns.filter(t => t.type === 'trade').map(t => t.created || 0));
                 const histTrades = window.App.LI.tradeHistory
                     .filter(t => !existingTradeTs.has(t.ts || 0))
