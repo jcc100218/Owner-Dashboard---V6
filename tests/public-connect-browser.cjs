@@ -5,7 +5,7 @@ const origin=await new Promise((resolve,reject)=>{server=spawn(process.execPath,
 browser=await chromium.launch({headless:true,executablePath:process.env.PLAYWRIGHT_CHROME_PATH||'/Applications/Google Chrome.app/Contents/MacOS/Google Chrome'});
 for(const viewport of [{width:320,height:740},{width:390,height:844},{width:844,height:390},{width:390,height:430}]){
 const context=await browser.newContext({viewport,isMobile:true,hasTouch:true,reducedMotion:viewport.height===430?'reduce':'no-preference'});
-const jwt=id=>'eyJhbGciOiJIUzI1NiJ9.'+Buffer.from(JSON.stringify({exp:Math.floor(Date.now()/1000)+3600,app_metadata:{user_id:id}})).toString('base64url')+'.controlled';
+const jwt=id=>'eyJhbGciOiJIUzI1NiJ9.'+Buffer.from(JSON.stringify({exp:Math.floor(Date.now()/1000)+3600,sub:id,app_metadata:{user_id:id,session_version:1}})).toString('base64url')+'.controlled';
 const A={token:jwt('account-a'),user:{id:'account-a'}},B={token:jwt('account-b'),user:{id:'account-b'}};
 await context.addInitScript(value=>{if(!sessionStorage.getItem('fixture-boot')){localStorage.setItem('fw_session_v1',JSON.stringify(value));sessionStorage.setItem('fixture-boot','1');}},A);
 let calls=0,release,response={status:503,body:{error:'Controlled provider failure'}},privateCalls=0;

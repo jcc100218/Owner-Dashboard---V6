@@ -10,6 +10,8 @@
        else (no session, or already onboarded) is redirected without a flash. -->
   <style id="preboot-hide">html{visibility:hidden!important}</style>
   <noscript><style>html{visibility:visible!important}</style></noscript>
+  <script src="reconai-shared/app-config.js"></script>
+  <script src="reconai-shared/mfl-api.js"></script>
   <script>
     // Client routing guard only; server endpoints still authorize every action.
     window.connectionSessionHealthy = function (session) {
@@ -31,9 +33,11 @@
         var legacy  = JSON.parse(localStorage.getItem('od_auth_v1') || 'null');
         // Onboarded = any league source bound or an explicit
         // completed flag. MFL-only users must not bounce back to this page.
+        var mflLinked = false;
+        try { mflLinked = !!window.MFL?.provider?.loadConnection?.(); } catch (_) { /* Unknown provenance requires explicit reconnect. */ }
         var onboarded = (profile && (profile.onboardingComplete === true || profile.sleeperUsername))
           || (legacy && legacy.username)
-          || localStorage.getItem('mfl_league_id') || localStorage.getItem('espn_league_id');
+          || mflLinked || localStorage.getItem('espn_league_id');
         if (onboarded) {
           var pref = localStorage.getItem('fw_preferred_view');
           window.location.replace(pref === 'scout' ? 'https://skjjcruz.github.io/ReconAI-sandbox-dev/' : 'index.html');
@@ -365,7 +369,8 @@
         const result = await operation(controller.signal);
         requireConnectionBinding();
         if (controller.signal.aborted) throw Object.assign(new Error('Timed out'), { name: 'AbortError' });
-        saveConnection(result.local, result.session);
+        if (result.commit) result.commit();
+        else saveConnection(result.local, result.session);
         if (result.event) trackConnectEvent(result.event, result.username || null, result.metadata || {});
         markLinked(which, result.label);
       } catch (error) {
@@ -410,11 +415,16 @@
       let input;
       try { input = leagueInputs('mfl'); } catch (error) { showAlert('error', error.message); return; }
       return runConnection('mfl', async signal => {
-        const { leagueId, year } = input;
-        const data = await providerJson('https://api.myfantasyleague.com/' + year + '/export?TYPE=league&L=' + leagueId + '&JSON=1', {}, signal);
-        const name = data && data.league && data.league.name;
-        if (typeof name !== 'string' || !name.trim() || data.error) throw new Error("We couldn't find that MFL league for " + year + '. Double-check the league ID and season.');
-        return { local: { mfl_league_id: leagueId, mfl_year: year }, label: name, event: 'mfl_connected', metadata: { mflLeagueId: leagueId } };
+        if (!window.MFL?.provider?.saveCredentials) throw new Error('The MFL connector did not load. Reload this page and try again.');
+        const connected = await window.MFL.provider.connect(input, {isCurrent:()=>bindingMatches() && !signal.aborted});
+        requireConnectionBinding();
+        const league = connected.leagues?.[0], creds = league?._platformCreds;
+        if (!league || !window.MFL.provider.isConnectionCurrent(creds)) throw new Error('MFL could not verify this connection. Try again.');
+        return { commit() {
+          requireConnectionBinding();
+          if (signal.aborted || !window.MFL.provider.isConnectionCurrent(creds)) throw new Error('Your connection changed. Retry before saving.');
+          window.MFL.provider.saveCredentials(league.id,{...creds,apiKey:null});
+        }, label: league.name, event: 'mfl_connected', metadata: {mflLeagueId:creds.leagueId} };
       });
     }
 
@@ -478,8 +488,8 @@
         const profile = getProfile();
         ['sleeperUsername', 'sleeperUserId', 'platforms', 'onboardingComplete'].forEach(key => delete profile[key]);
         const local = { [PROFILE_KEY]: JSON.stringify(profile) };
-        [AUTH_KEY, 'wr_guest_v1', 'od_locked_username_v2', 'mfl_league_id', 'mfl_year', 'espn_league_id', 'espn_year', SESSION_KEY].forEach(key => { local[key] = null; });
-        saveConnection(local, { espn_s2: null, espn_swid: null });
+        [AUTH_KEY, 'wr_guest_v1', 'od_locked_username_v2', 'mfl_league_id', 'mfl_year', 'mfl_franchise_id', 'mfl_connection_owner_v1', 'espn_league_id', 'espn_year', SESSION_KEY].forEach(key => { local[key] = null; });
+        saveConnection(local, { espn_s2:null, espn_swid:null, mfl_api_key:null, mfl_api_key_context_v1:null, mfl_guest_owner_v1:null, mfl_write_cookie:null, mfl_write_host:null, mfl_write_context_v1:null });
         window.location.href = 'landing.html?signout';
       } catch (error) { showAlert('error', error.message); }
     }

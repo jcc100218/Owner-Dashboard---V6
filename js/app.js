@@ -60,11 +60,57 @@
     const DHQ_HOME_URL = 'landing.html?home';
     window.App.DHQ_HOME_URL = DHQ_HOME_URL;
 
-    // ── Owner default: bigloco's locked-in MFL franchise in the "MLS Dynasty
-    // League" (id 41969). Used to auto-select the team on rehydrate when no
-    // mfl_franchise_id is persisted yet. Matched by NAME in loadMflData so the
-    // pick survives storage clears / new devices without pinning a numeric id. ──
-    const OWNER_MFL_TEAM = 'St. Louis City SC';
+    // MFL request ownership is captured before cloud/provider work. The cloud
+    // column belongs to legacy users; modern account profiles are not equivalent.
+    let mflAccountEpoch = 0;
+    window.addEventListener('storage', event => {
+        if (!event.key || ['fw_session_v1','od_session_v1','od_auth_v1','wr_guest_v1'].includes(event.key) || /^sb-.*-auth-token/.test(event.key)) mflAccountEpoch++;
+    });
+    function captureMflAccount() {
+        const read = () => JSON.stringify(['fw_session_v1','od_session_v1','od_auth_v1','wr_guest_v1', ...Object.keys(localStorage).filter(key => /^sb-.*-auth-token/.test(key)).sort()].map(key => [key,localStorage.getItem(key)]));
+        const snapshot = read(), epoch = mflAccountEpoch;
+        let retired = false;
+        return { isCurrent() {
+            if (retired) return false;
+            try { if (epoch === mflAccountEpoch && read() === snapshot) return true; } catch (_) { /* storage unavailable */ }
+            retired = true; return false;
+        } };
+    }
+    async function mflCloudConnection(scope, connection) {
+        scope.check();
+        const owner = window.MFL.provider.currentOwner();
+        if (!owner?.startsWith('legacy:')) return { status: 'device', connection: null };
+        const token = window.OD?.getSessionToken?.(), username = owner.slice(7);
+        let claims;
+        try { claims = JSON.parse(window.atob(token.split('.')[1].replace(/-/g,'+').replace(/_/g,'/'))); } catch (_) { /* reject below */ }
+        if (!claims || claims.sub !== username || claims.app_metadata?.sleeper_username !== username || claims.exp * 1000 <= Date.now()) throw new Error('Sign in again before syncing this MFL connection.');
+        const base = window.OD?.SUPABASE_URL || window.App?.CONFIG?.supabaseUrl;
+        const anon = window.OD?.SUPABASE_ANON || window.App?.CONFIG?.supabaseAnon;
+        if (!base || !anon) return { status: 'device', connection: null };
+        const check = () => { scope.check(); if (window.MFL.provider.currentOwner() !== owner || window.OD?.getSessionToken?.() !== token) throw new Error('Your account changed before MFL account sync completed. Reload to verify the saved connection.'); };
+        const safe = connection ? {leagueId:String(connection.leagueId),year:String(connection.year),franchiseId:connection.franchiseId ? String(connection.franchiseId) : null} : null;
+        const url = new URL('/rest/v1/users', base);
+        url.searchParams.set('select','mfl_connection');
+        if (safe) url.searchParams.set('on_conflict','sleeper_username');
+        else url.searchParams.set('sleeper_username','eq.'+username);
+        const controller = new AbortController();
+        let timer;
+        try {
+            const data = await Promise.race([(async()=>{
+                check();
+                const response = await fetch(url.href, {method:safe?'POST':'GET',signal:controller.signal,
+                    headers:{apikey:anon,Authorization:'Bearer '+token,'Content-Type':'application/json',...(safe?{Prefer:'resolution=merge-duplicates,return=representation'}:{})},
+                    ...(safe?{body:JSON.stringify({sleeper_username:username,mfl_connection:safe})}:{})});
+                check();
+                if (!response.ok) throw new Error(safe ? 'The connection is saved on this device, but account sync was not confirmed.' : 'Account connection could not load. Reconnect MFL below or retry after reloading.');
+                const result = await response.json(); check(); return result;
+            })(), new Promise((_,reject)=>{timer=setTimeout(()=>{controller.abort();reject(new Error(safe?'The connection is saved on this device. Account sync timed out; its outcome is unconfirmed.':'Account connection timed out. Reconnect MFL below or retry after reloading.'));},20000);})]);
+            if (!Array.isArray(data) || data.length > 1) throw new Error('Account connection could not be verified. Your device connection is preserved.');
+            const saved = data[0]?.mfl_connection || null;
+            if (safe && (!saved || String(saved.leagueId)!==safe.leagueId || String(saved.year)!==safe.year || (saved.franchiseId||null)!==safe.franchiseId)) throw new Error('The connection is saved on this device, but account sync was not confirmed.');
+            return {status:safe?'synced':'loaded',connection:saved};
+        } finally { clearTimeout(timer); }
+    }
 
     // ── Notes from the Front — Field Log feed from Scout sessions ──
     var FL_CAT_COLORS = { trade:'var(--k-d4af37, #d4af37)', roster:'var(--k-2ecc71, #2ecc71)', draft:'var(--k-3498db, #3498db)', waivers:'var(--k-9b59b6, #9b59b6)', research:'var(--k-e67e22, #e67e22)', note:'var(--k-808080, #808080)' };
@@ -867,7 +913,13 @@
         const [mflConnecting, setMflConnecting] = useState(false);
         const [mflError, setMflError] = useState(null);
         const [mflFranchises, setMflFranchises] = useState(null);
-        const [mflPendingResult, setMflPendingResult] = useState(null);
+        const [, setMflPendingResult] = useState(null);
+        const [mflSaveStatus, setMflSaveStatus] = useState(null);
+        const mflRequestRef = React.useRef(null), mflPendingRef = React.useRef(null), mflPageRef = React.useRef(null);
+        const mflViewRef = React.useRef(null);
+        const mflView = String(selectedYear)+':'+String(selectedLeague?.id || '');
+        if (mflViewRef.current !== null && mflViewRef.current !== mflView && mflRequestRef.current) mflRequestRef.current.retired = true;
+        mflViewRef.current = mflView;
         const visibleEspnLeagues = (ESPN_ENABLED || PLATFORM_SANDBOX_ACCESS) ? espnLeagues : [];
         const visibleMflLeagues = MFL_SANDBOX_ACCESS ? mflLeagues : [];
         const [espnError, setEspnError] = useState(null);
@@ -1016,77 +1068,86 @@
             };
         }
 
-        // ── MFL rehydration ──
-        // Sleeper leagues reload from the username on every launch; MFL has no
-        // such identity, so a connected league would vanish on refresh. We
-        // persist the connection (id / year / team) and re-fetch it on mount so
-        // a locked-in MFL league always reappears in the franchise picker.
+        function cancelMFLConnect() {
+            mflRequestRef.current = null;
+            mflPendingRef.current = null;
+            setMflConnecting(false); setMflFranchises(null); setMflPendingResult(null);
+        }
+        function reportMFLFailure(request, error) {
+            if (request && mflRequestRef.current !== request) return;
+            if (mflPageRef.current && !mflPageRef.current.isCurrent()) {
+                setMflLeagues([]);mflPendingRef.current=null;setMflFranchises(null);setMflPendingResult(null);setMflSaveStatus(null);
+            }
+            setMflError(error.message || 'MFL could not load. Reconnect below.');
+        }
+        function beginMFLRequest() {
+            if (!mflPageRef.current) mflPageRef.current = captureMflAccount();
+            const page = mflPageRef.current, view = mflViewRef.current;
+            if (!page.isCurrent()) throw new Error('Your account changed. Reload before connecting MFL.');
+            const request = { busy:true, retired:false, isCurrent() {
+                if (!page.isCurrent() || mflRequestRef.current !== request || mflViewRef.current !== view) request.retired = true;
+                return !request.retired;
+            } };
+            request.check = () => { if (!request.isCurrent()) throw new Error('Your account or league selection changed. Reopen the MFL connection.'); };
+            mflRequestRef.current = request;
+            return request;
+        }
+        async function prepareMFLConnection(request, credentials, explicit) {
+            request.check();
+            let creds = credentials;
+            if (explicit) {
+                const connected = await window.MFL.provider.connect(credentials, {isCurrent:request.isCurrent});
+                request.check();
+                creds = connected.leagues[0]._platformCreds;
+            }
+            if (!window.MFL.provider.isConnectionCurrent(creds)) throw new Error('This MFL connection needs to be reconnected for your account.');
+            const raw = await window.MFL.fetchLeague(creds.leagueId, creds.year, creds.apiKey || null, {isCurrent:request.isCurrent});
+            request.check();
+            const list = raw.leagueData.league.franchises.franchise;
+            const franchises = (Array.isArray(list) ? list : [list]).map(row => ({...row,id:String(row.id)}));
+            const players = raw.playersData.players.player;
+            const crosswalk = window.MFL.buildCrosswalk({}, Array.isArray(players)?players:[players], creds.year);
+            const result = window.MFL.mapToSleeperState(raw, creds.leagueId, creds.year, crosswalk);
+            return Object.freeze({request,creds:Object.freeze({...creds}),raw,result,franchises:Object.freeze(franchises)});
+        }
+        // Rehydration uses only current-owner records. Unknown flat metadata is
+        // preserved for an explicit reconnect, never silently adopted.
         useEffect(() => {
             if (!MFL_SANDBOX_ACCESS) return;
-            let alive = true;
+            let request;
+            try { request = beginMFLRequest(); setMflConnecting(true); } catch (error) { setMflError(error.message); return; }
             (async () => {
-                // Resolve the connection: prefer local, else pull the cloud-synced
-                // one so a fresh device rehydrates the MFL league + team without a
-                // manual reconnect (mirrors how Sleeper rehydrates from the username).
-                let leagueId = localStorage.getItem('mfl_league_id');
-                if (!leagueId && window.OD?.loadMflConnection) {
-                    try {
-                        const conn = await window.OD.loadMflConnection();
-                        if (conn?.leagueId) {
-                            leagueId = String(conn.leagueId);
-                            localStorage.setItem('mfl_league_id', leagueId);
-                            if (conn.year) localStorage.setItem('mfl_year', String(conn.year));
-                            if (conn.franchiseId) localStorage.setItem('mfl_franchise_id', String(conn.franchiseId));
-                        }
-                    } catch (e) { window.wrLog?.('app.loadMflConnection', e); }
-                }
-                if (!alive || !leagueId) return;
-                // mfl-api.js ships in the shared bundle, but guard against the
-                // connector not being ready yet on a cold start.
-                for (let i = 0; i < 50 && !window.MFL; i++) {
-                    await new Promise(r => setTimeout(r, 100));
-                }
-                if (!alive || !window.MFL) return;
-                const year = localStorage.getItem('mfl_year') || '2026';
-                const apiKey = sessionStorage.getItem('mfl_api_key') || null;
-                let franchiseId = localStorage.getItem('mfl_franchise_id') || null;
                 try {
-                    const raw = await window.MFL.fetchLeague(leagueId, year, apiKey);
-                    if (!alive || !raw?.leagueData?.league) return;
-                    const franchisesRaw = raw.leagueData?.league?.franchises?.franchise || [];
-                    const franchiseArr = Array.isArray(franchisesRaw) ? franchisesRaw : [franchisesRaw];
-                    // Owner default: if bigloco hasn't picked a team yet, lock in the
-                    // known franchise (OWNER_MFL_TEAM) by name and persist its id so
-                    // it sticks across reloads / devices.
-                    if (!franchiseId && (sleeperUsername || '').toLowerCase() === 'bigloco') {
-                        const norm = s => (s || '').toLowerCase().replace(/[^a-z0-9]/g, '');
-                        const owned = franchiseArr.find(f => norm(f.name) === norm(OWNER_MFL_TEAM));
-                        if (owned) { franchiseId = owned.id; localStorage.setItem('mfl_franchise_id', String(owned.id)); }
+                    for (let i=0;i<50&&!window.MFL?.provider?.loadConnection;i++) { await new Promise(resolve=>setTimeout(resolve,100)); request.check(); }
+                    if (!window.MFL?.provider?.loadConnection) throw new Error('MFL connector is unavailable. Reload and retry.');
+                    let creds = window.MFL.provider.loadConnection();
+                    if (!creds) {
+                        const cloud = await mflCloudConnection(request);
+                        request.check();
+                        if (cloud.connection?.leagueId) creds = {...cloud.connection,apiKey:null,_mflOwner:window.MFL.provider.currentOwner()};
                     }
-                    const mflPlayerArr = raw.playersData?.players?.player || [];
-                    const allMflPlayers = Array.isArray(mflPlayerArr) ? mflPlayerArr : [mflPlayerArr];
-                    const crosswalk = window.MFL.buildCrosswalk({}, allMflPlayers, year);
-                    const result = window.MFL.mapToSleeperState(raw, leagueId, year, crosswalk);
-                    if (!alive) return;
-                    const league = buildMflLeagueObj(result, leagueId, franchiseId);
-                    setMflLeagues(prev => {
-                        const filtered = prev.filter(l => l._mflLeagueId !== league._mflLeagueId);
-                        return [...filtered, league];
-                    });
-                    // Keep the cloud copy in sync — backfills a league first
-                    // connected on this device so it follows the account elsewhere.
-                    window.OD?.saveMflConnection?.({ leagueId, year, franchiseId });
-                    // Still no team (non-owner, or name not matched)? Prime the
-                    // franchise picker so it can be locked in one click from the MFL card.
-                    if (!franchiseId) {
-                        setMflFranchises(franchiseArr);
-                        setMflPendingResult(result);
+                    if (!creds) return;
+                    const pending = await prepareMFLConnection(request,creds,false);
+                    request.check();
+                    if (creds.franchiseId && pending.franchises.some(row=>row.id===String(creds.franchiseId))) {
+                        const id = pending.result.league.league_id;
+                        window.MFL.provider.saveCredentials(id,creds);
+                        const league = {...buildMflLeagueObj(pending.result,creds.leagueId,creds.franchiseId),_platformCreds:{...creds}};
+                        setMflLeagues(previous=>[...previous.filter(row=>row.id!==league.id),league]);
+                    } else {
+                        mflPendingRef.current = pending; setMflPendingResult(pending); setMflFranchises(pending.franchises);
+                        if (creds.franchiseId) setMflError('Your saved team is no longer listed. Select your current franchise.');
                     }
-                } catch (e) {
-                    window.wrLog?.('app.loadMflData', e);
-                }
+                } catch (error) {
+                    reportMFLFailure(request,error);
+                } finally { if (mflRequestRef.current === request) {request.busy=false;setMflConnecting(false);} }
             })();
-            return () => { alive = false; };
+            const changed = () => {
+                if (mflPageRef.current?.isCurrent()) return;
+                cancelMFLConnect(); setMflLeagues([]); setMflError('Your account changed. Reload to connect the current account.');
+            };
+            window.addEventListener('storage',changed);
+            return () => { mflRequestRef.current=null; mflPendingRef.current=null; window.removeEventListener('storage',changed); };
         }, []);
 
         // Initial, selected-year and return-to-hub refresh share a stream of
@@ -1714,13 +1775,13 @@
                                 </div>
                             );
                         })}
-                        <div onClick={() => setShowConnect(true)}
-                            style={{ cursor: 'pointer', border: '1px dashed var(--acc-line2, rgba(212,175,55,0.3))', borderRadius: '12px', padding: '14px', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '9px', color: 'var(--silver)', fontFamily: 'var(--font-mono)', fontSize: 'var(--text-label, 0.8rem)', minHeight: '92px', transition: 'all .14s' }}
+                        <button type="button" onClick={() => setShowConnect(true)}
+                            style={{ background:'transparent',width:'100%',cursor: 'pointer', border: '1px dashed var(--acc-line2, rgba(212,175,55,0.3))', borderRadius: '12px', padding: '14px', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '9px', color: 'var(--silver)', fontFamily: 'var(--font-mono)', fontSize: 'var(--text-label, 0.8rem)', minHeight: '92px', transition: 'all .14s' }}
                             onMouseEnter={e => { e.currentTarget.style.borderColor = 'var(--gold)'; e.currentTarget.style.color = 'var(--gold)'; }}
                             onMouseLeave={e => { e.currentTarget.style.borderColor = 'var(--acc-line2, rgba(212,175,55,0.3))'; e.currentTarget.style.color = 'var(--silver)'; }}>
                             <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" strokeWidth="2"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
                             Add a league
-                        </div>
+                        </button>
                     </div>
                     {hubSyncing && <div style={{ padding: '10px', textAlign: 'center', color: 'var(--silver)', fontSize: 'var(--text-label, 0.75rem)', opacity: 0.6 }}>Loading more leagues…</div>}
                 </div>
@@ -1781,53 +1842,45 @@
 
         async function handleMFLConnect(leagueId, year, apiKey) {
             if (!platformAccessAllowed('mfl')) { setMflError(platformBetaMessage('mfl')); return; }
-            if (!leagueId) { setMflError('Enter your MFL League ID'); return; }
-            if (!window.MFL) { setMflError('MFL connector not loaded — refresh and try again'); return; }
-            setMflConnecting(true);
-            setMflError(null);
+            if (mflRequestRef.current?.busy) return;
+            if (!window.MFL?.provider?.loadConnection) { setMflError('MFL connector not loaded — reload and try again'); return; }
+            let request;
             try {
-                const raw = await window.MFL.fetchLeague(leagueId, year, apiKey || null);
-                if (!raw?.leagueData?.league) throw new Error('Invalid MFL league data. Check your League ID and year.');
-                // Build crosswalk (empty Sleeper players — rebuilds when full DB loads)
-                const mflPlayerArr = raw.playersData?.players?.player || [];
-                const allMflPlayers = Array.isArray(mflPlayerArr) ? mflPlayerArr : [mflPlayerArr];
-                const crosswalk = window.MFL.buildCrosswalk({}, allMflPlayers, year);
-                const result = window.MFL.mapToSleeperState(raw, leagueId, year, crosswalk);
-                // Extract franchise list for picker
-                const franchises = raw.leagueData?.league?.franchises?.franchise || [];
-                const franchiseArr = Array.isArray(franchises) ? franchises : [franchises];
-                // Store credentials
-                localStorage.setItem('mfl_league_id', leagueId);
-                localStorage.setItem('mfl_year', String(year));
-                if (apiKey) { sessionStorage.setItem('mfl_api_key', apiKey); localStorage.removeItem('mfl_api_key'); }
-                setMflPendingResult(result);
-                setMflFranchises(franchiseArr);
-            } catch (e) {
-                setMflError(e.message || 'MFL connection failed');
-            } finally {
-                setMflConnecting(false);
-            }
+                request=beginMFLRequest();
+                mflPendingRef.current=null;setMflPendingResult(null);setMflFranchises(null);
+                setMflConnecting(true);setMflError(null);setMflSaveStatus(null);
+                const pending=await prepareMFLConnection(request,{leagueId,year,apiKey:apiKey||null},true);
+                request.check();
+                mflPendingRef.current=pending;setMflPendingResult(pending);setMflFranchises(pending.franchises);
+            } catch (error) { reportMFLFailure(request,error); }
+            finally { if (request && mflRequestRef.current===request) {request.busy=false;setMflConnecting(false);} }
         }
-
-        function finalizeMFLConnect(franchiseId) {
+        async function finalizeMFLConnect(franchiseId) {
             if (!platformAccessAllowed('mfl')) return;
-            const result = mflPendingResult;
-            if (!result) return;
-            const leagueId = localStorage.getItem('mfl_league_id');
-            // Lock in the team pick so it rehydrates on every future launch
-            // (league id + year are already persisted in handleMFLConnect).
-            if (franchiseId) localStorage.setItem('mfl_franchise_id', String(franchiseId));
-            else localStorage.removeItem('mfl_franchise_id');
-            // Sync the connection to the account so it follows the user across devices.
-            window.OD?.saveMflConnection?.({ leagueId, year: localStorage.getItem('mfl_year') || '2026', franchiseId: franchiseId || null });
-            const league = buildMflLeagueObj(result, leagueId, franchiseId);
-            setMflLeagues(prev => {
-                const filtered = prev.filter(l => l._mflLeagueId !== league._mflLeagueId);
-                return [...filtered, league];
-            });
-            setMflFranchises(null);
-            setMflPendingResult(null);
-            handleSelectLeague(league);
+            const pending=mflPendingRef.current;
+            if (!pending || pending.request.busy) return;
+            const request=pending.request;
+            try {
+                request.check();
+                const id=String(franchiseId);
+                if (!pending.franchises.some(row=>row.id===id)) throw new Error('Select a team from this MFL league.');
+                // Recheck canonical raw provenance immediately before storage.
+                window.MFL.mapToSleeperState(pending.raw,pending.creds.leagueId,pending.creds.year);
+                const creds={...pending.creds,franchiseId:id};
+                const key=pending.result.league.league_id;
+                window.MFL.provider.saveCredentials(key,creds);
+                request.busy=true;setMflConnecting(true);setMflError(null);
+                const league={...buildMflLeagueObj(pending.result,creds.leagueId,id),_platformCreds:creds};
+                setMflLeagues(previous=>[...previous.filter(row=>row.id!==league.id),league]);
+                let status;
+                try { const cloud=await mflCloudConnection(request,creds);status=cloud.status==='synced'?'Saved on this device and synced to your account.':'Saved on this device. Account sync is unavailable for this sign-in.'; }
+                catch (error) { request.check();status=error.message; }
+                request.check();setMflSaveStatus(status);
+                mflPendingRef.current=null;setMflFranchises(null);setMflPendingResult(null);
+                // Keep the confirmation visible in the hub; the saved card opens
+                // the selected franchise through the existing navigation.
+            } catch (error) { reportMFLFailure(request,error); }
+            finally { if (mflRequestRef.current===request) {request.busy=false;setMflConnecting(false);} }
         }
 
         // ── The connect that people actually use (owner find 2026-09-09) ──
@@ -2000,6 +2053,12 @@
                 </section>}
 
 
+                {!showConnect && (mflError || mflFranchises || mflSaveStatus) && <section role="region" aria-label="MFL connection" style={{padding:'12px',marginBottom:'12px'}}>
+                    {mflError && <p role="alert" style={{fontSize:'14px'}}>{mflError}</p>}
+                    {mflSaveStatus && <p role="status" style={{fontSize:'14px'}}>{mflSaveStatus}</p>}
+                    <button className="hub-cta gold" onClick={()=>setShowConnect(true)}>{mflFranchises?'Choose your MFL team':'Manage MFL connection'}</button>
+                </section>}
+
                 {(espnConnecting || espnError || espnChoiceLeague || visibleEspnLeagues.length > 0) && (
                     <section className="hub-franchise-picker" aria-label="ESPN connection" style={{ margin: '12px', padding: '14px', border: '1px solid var(--acc-line1)', borderRadius: '12px' }}>
                         <strong>ESPN {espnChoiceLeague?.season || visibleEspnLeagues[0]?.season || ''}</strong>
@@ -2062,13 +2121,13 @@
                      This is the only entry to the platform connectors now; the
                      picker itself is always the default surface underneath. ── */}
                 {showConnect && (
-                <div onClick={() => setShowConnect(false)}
+                <div onClick={() => {cancelMFLConnect();setShowConnect(false);}}
                     style={{ position: 'fixed', inset: 0, zIndex: 500, background: 'rgba(4,4,7,0.74)', backdropFilter: 'blur(3px)', WebkitBackdropFilter: 'blur(3px)', display: 'flex', alignItems: 'flex-start', justifyContent: 'center', overflowY: 'auto', padding: 'calc(52px + var(--wr-dev-banner-height, 0px)) 12px 40px' }}>
                 <div onClick={e => e.stopPropagation()}
                     style={{ width: '100%', maxWidth: '760px', background: 'var(--page-bg, #08080B)', border: '1px solid var(--acc-line2, rgba(212,175,55,0.3))', borderRadius: '16px', padding: '16px', boxShadow: '0 24px 70px rgba(0,0,0,0.6)' }}>
                     <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '14px' }}>
                         <span style={{ fontFamily: 'var(--font-title)', fontWeight: 700, fontSize: '1.05rem', letterSpacing: '.08em', color: 'var(--gold)' }}>ADD A LEAGUE</span>
-                        <button onClick={() => setShowConnect(false)} className="hub-cta ghost" style={{ display: 'inline-flex', alignItems: 'center', gap: '6px', width: 'auto', flex: '0 0 auto' }}>✕ Close</button>
+                        <button onClick={() => {cancelMFLConnect();setShowConnect(false);}} className="hub-cta ghost" style={{ display: 'inline-flex', alignItems: 'center', gap: '6px', width: 'auto', flex: '0 0 auto' }}>✕ Close</button>
                     </div>
                     {resumeLeague && (
                         <div className="session-strip" style={{ marginBottom: '12px' }}>
@@ -2120,7 +2179,7 @@
                             </div>
                             <div>
                                 <div className="product-card-title">MFL</div>
-                                <div className="product-card-subtitle">{visibleMflLeagues.length > 0 ? visibleMflLeagues.length + ' league' + (visibleMflLeagues.length !== 1 ? 's' : '') + ' synced' : 'MyFantasyLeague connector'}</div>
+                                <div className="product-card-subtitle">{visibleMflLeagues.length > 0 ? visibleMflLeagues.length + ' league' + (visibleMflLeagues.length !== 1 ? 's' : '') + ' connected' : 'MyFantasyLeague connector'}</div>
                             </div>
                         </div>
                         <div className="product-card-body">
@@ -2134,19 +2193,21 @@
                                     ))}
                                 </div>
                             )}
+                            {mflError && <div role="alert" style={{fontSize:'14px',color:'var(--k-e74c3c, #e74c3c)',marginBottom:'8px'}}>{mflError}</div>}
+                            {mflSaveStatus && <div role="status" style={{fontSize:'14px',color:'var(--silver)',marginBottom:'8px'}}>{mflSaveStatus}</div>}
                             {/* Franchise picker */}
                             {mflFranchises && (
                                 <div>
                                     <div style={{ fontSize: 'var(--text-label, 0.75rem)', color: 'var(--gold)', marginBottom: '8px', fontWeight: 700 }}>Select your team:</div>
                                     <div style={{ maxHeight: '200px', overflow: 'auto' }}>
                                         {mflFranchises.map(f => (
-                                            <button key={f.id} onClick={() => finalizeMFLConnect(f.id)}
-                                                style={{ display: 'block', width: '100%', padding: '8px 10px', marginBottom: '4px', background: 'rgba(46,125,50,0.08)', border: '1px solid rgba(46,125,50,0.25)', borderRadius: '6px', color: 'var(--white)', fontSize: 'var(--text-body, 1rem)', fontFamily: 'var(--font-body)', cursor: 'pointer', textAlign: 'left' }}>
+                                            <button key={f.id} disabled={mflConnecting} onClick={() => finalizeMFLConnect(f.id)}
+                                                style={{ display: 'block', minHeight:'44px', width: '100%', padding: '8px 10px', marginBottom: '4px', background: 'rgba(46,125,50,0.08)', border: '1px solid rgba(46,125,50,0.25)', borderRadius: '6px', color: 'var(--white)', fontSize: 'var(--text-body, 1rem)', fontFamily: 'var(--font-body)', cursor: 'pointer', textAlign: 'left' }}>
                                                 {f.name || f.owner_name || ('Team ' + f.id)}
                                             </button>
                                         ))}
                                     </div>
-                                    <button onClick={() => { setMflFranchises(null); setMflPendingResult(null); }} style={{ fontSize: 'var(--text-label, 0.75rem)', color: 'var(--silver)', background: 'none', border: 'none', cursor: 'pointer', marginTop: '6px' }}>Cancel</button>
+                                    <button onClick={cancelMFLConnect} style={{ minHeight:'44px',minWidth:'44px',fontSize: '14px', color: 'var(--silver)', background: 'none', border: 'none', cursor: 'pointer', marginTop: '6px' }}>Cancel</button>
                                 </div>
                             )}
                             {/* Connect form */}
@@ -2166,14 +2227,14 @@
                                         ))}
                                     </div>
                                     <div style={{ display: 'flex', gap: '6px', marginBottom: '8px' }}>
-                                        <input id="wr-mfl-id" placeholder="League ID" style={{ flex: 1, padding: '8px 10px', background: 'var(--charcoal)', border: '1px solid var(--acc-line1, rgba(212,175,55,0.2))', borderRadius: '6px', color: 'var(--white)', fontSize: 'var(--text-body, 1rem)', fontFamily: 'var(--font-body)' }} />
-                                        <input id="wr-mfl-year" placeholder="Year" defaultValue="2026" style={{ width: '70px', padding: '8px 10px', background: 'var(--charcoal)', border: '1px solid var(--acc-line1, rgba(212,175,55,0.2))', borderRadius: '6px', color: 'var(--white)', fontSize: 'var(--text-body, 1rem)', fontFamily: 'var(--font-body)', textAlign: 'center' }} />
+                                        <input id="wr-mfl-id" aria-label="MFL league ID" disabled={mflConnecting} placeholder="League ID" style={{ minWidth:0,flex: 1, padding: '8px 10px', background: 'var(--charcoal)', border: '1px solid var(--acc-line1, rgba(212,175,55,0.2))', borderRadius: '6px', color: 'var(--white)', fontSize: 'var(--text-body, 1rem)', fontFamily: 'var(--font-body)' }} />
+                                        <input id="wr-mfl-year" aria-label="MFL season" disabled={mflConnecting} placeholder="Year" defaultValue="2026" style={{ width: '70px', padding: '8px 10px', background: 'var(--charcoal)', border: '1px solid var(--acc-line1, rgba(212,175,55,0.2))', borderRadius: '6px', color: 'var(--white)', fontSize: 'var(--text-body, 1rem)', fontFamily: 'var(--font-body)', textAlign: 'center' }} />
                                     </div>
                                     <details style={{ marginBottom: '8px' }}>
                                         <summary style={{ fontSize: 'var(--text-label, 0.75rem)', color: 'var(--silver)', cursor: 'pointer', opacity: 0.7 }}>Private league? Add API key</summary>
-                                        <input id="wr-mfl-apikey" placeholder="API Key (optional)" style={{ width: '100%', marginTop: '6px', padding: '8px 10px', background: 'var(--charcoal)', border: '1px solid var(--acc-line1, rgba(212,175,55,0.2))', borderRadius: '6px', color: 'var(--white)', fontSize: 'var(--text-body, 1rem)', fontFamily: 'var(--font-body)' }} />
+                                        <input id="wr-mfl-apikey" aria-label="MFL private API key" type="password" disabled={mflConnecting} placeholder="API Key (optional)" style={{ width: '100%', marginTop: '6px', padding: '8px 10px', background: 'var(--charcoal)', border: '1px solid var(--acc-line1, rgba(212,175,55,0.2))', borderRadius: '6px', color: 'var(--white)', fontSize: 'var(--text-body, 1rem)', fontFamily: 'var(--font-body)' }} />
                                     </details>
-                                    {mflError && <div style={{ fontSize: 'var(--text-label, 0.75rem)', color: 'var(--k-e74c3c, #e74c3c)', marginBottom: '8px' }}>{mflError}</div>}
+
                                     <button className="hub-cta gold" disabled={mflConnecting} onClick={() => {
                                         const id = document.getElementById('wr-mfl-id')?.value?.trim();
                                         const yr = document.getElementById('wr-mfl-year')?.value?.trim() || '2026';

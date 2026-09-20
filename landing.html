@@ -121,7 +121,7 @@
           try { localStorage.removeItem('mfl_league_id'); } catch (e) {}
           try { localStorage.removeItem('mfl_year'); } catch (e) {}
           try { localStorage.removeItem('mfl_franchise_id'); } catch (e) {}
-          ['espn_league_id', 'espn_year', 'espn_s2', 'espn_swid', 'mfl_api_key', 'wr_guest_v1'].forEach(function (key) {
+          ['espn_league_id', 'espn_year', 'espn_s2', 'espn_swid', 'mfl_api_key', 'mfl_api_key_context_v1', 'mfl_guest_owner_v1', 'mfl_write_cookie', 'mfl_write_host', 'mfl_write_context_v1', 'wr_guest_v1'].forEach(function (key) {
             try { localStorage.removeItem(key); sessionStorage.removeItem(key); } catch (e) {}
           });
           window.location.replace('connect-sleeper.html'); return;
@@ -1985,7 +1985,7 @@ if(document.readyState==='loading')window.addEventListener('DOMContentLoaded',in
       try { localStorage.removeItem('mfl_league_id'); } catch {}
       try { localStorage.removeItem('mfl_year'); } catch {}
       try { localStorage.removeItem('mfl_franchise_id'); } catch {}
-      for (const key of ['espn_league_id', 'espn_year', 'espn_s2', 'espn_swid', 'mfl_api_key', 'wr_guest_v1']) {
+      for (const key of ['espn_league_id', 'espn_year', 'espn_s2', 'espn_swid', 'mfl_api_key', 'mfl_api_key_context_v1', 'mfl_guest_owner_v1', 'mfl_write_cookie', 'mfl_write_host', 'mfl_write_context_v1', 'wr_guest_v1']) {
         try { localStorage.removeItem(key); sessionStorage.removeItem(key); } catch {}
       }
     }
