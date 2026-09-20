@@ -1955,6 +1955,7 @@
                     currentSeason: currentLeague.season || activeYear,
                     prevSeason: STATS_YEAR,
                     nflState,
+                    isCurrent: () => loadSeq === loadSeqRef.current && espnCurrent(),
                 });
 
                 if (loadSeq !== loadSeqRef.current || !espnCurrent()) return;
@@ -1988,6 +1989,7 @@
                             currentSeason: currentLeague.season || activeYear,
                             prevSeason: STATS_YEAR,
                             nflState: bgNfl,
+                            isCurrent: () => loadSeq === loadSeqRef.current && espnCurrent(),
                         });
                         if (loadSeq !== loadSeqRef.current || !espnCurrent()) return;
                         if (window.S?.currentLeagueId && String(window.S.currentLeagueId) !== String(bgLeagueId)) return;

@@ -13,7 +13,7 @@ function fixture({ response = rawLeague(), store = new Map(), secrets = new Map(
     if (!store.has('espn_league_id')) store.set('espn_league_id', '123');
     if (!store.has('espn_year')) store.set('espn_year', '2025');
     const storage = (data, kind) => ({ getItem: k => data.get(k) ?? null, setItem: (k, v) => { if (fail(k, kind)) throw Error('quota'); data.set(k, String(v)); }, removeItem: k => data.delete(k) });
-    const requests = [], events = {}, ctx = { console: { log() {}, warn() {}, error() {} }, Map, Set, WeakMap, Date, URL, Promise, setTimeout, clearTimeout,
+    const requests = [], events = {}, ctx = { console: { log() {}, warn() {}, error() {} }, Map, Set, WeakMap, Date, URL, Promise, AbortController, setTimeout, clearTimeout,
         atob: value => Buffer.from(value, 'base64').toString('utf8'), localStorage: storage(store, 'local'), sessionStorage: storage(secrets, 'session'),
         addEventListener: (name, fn) => { (events[name] ||= []).push(fn); }, App: {}, S: { platform: 'sleeper', currentLeagueId: 'active-original', rosters: ['unchanged'], players: { sentinel: { full_name: 'Preserve' } } },
         fetch: async (url, options) => { requests.push({ url, options }); const body = await (typeof response === 'function' ? response() : response); return { ok: true, json: async () => body }; } };
@@ -115,6 +115,30 @@ const tests = {
             wait.resolve({ rosters: league.rosters }); await request;
             assert.equal(viewing, 'owner-b'); assert.equal(error, undefined);
             assert.equal(applied?.roster_id, switchAccount ? undefined : '2');
+        }
+    },
+    async actualLoaderAndProviderRejectForeignSeasonAndLateView() {
+        const src=fs.readFileSync('js/league-detail.js','utf8');
+        const ast=require('@babel/standalone').packages.parser.parse(src,{sourceType:'script',plugins:['jsx']});
+        function find(node){if(!node||typeof node!=='object')return null;if(node.type==='FunctionDeclaration'&&node.id?.name==='loadLeagueDetails')return node;for(const value of Object.values(node)){if(Array.isArray(value)){for(const child of value){const found=find(child);if(found)return found;}}else if(value&&typeof value==='object'){const found=find(value);if(found)return found;}}return null;}
+        const fn=find(ast);assert(fn);
+        for(const mode of ['valid','foreign-season','account-switch','closed-view']){
+            const wait=deferred();let count=0,applied,error;
+            const x=fixture({secrets:new Map([['espn_s2','private-a-fixture'],['espn_swid','swid-a-fixture']]),response:()=>++count===1?rawLeague():count===2?wait.promise:{topics:[]}});
+            x.ctx.OD={getSessionToken:()=>JSON.parse(x.store.get('fw_session_v1')).token};
+            const league=x.api.chooseTeam(await x.load(),'2'),originalToken=x.ctx.OD.getSessionToken();
+            Object.assign(x.ctx,{currentLeague:league,loadSeqRef:{current:0},sleeperUserId:'not-espn',activeYear:'2025',STATS_YEAR:'2024',SLEEPER_BASE_URL:'https://controlled.invalid',
+                setMyRoster(){},setViewingOwnerId(){},setStandings(){},setLoading(){},setLoadStage(){},setError:value=>error=value,
+                fetchAllPlayers:async()=>({}),fetchJSON:async()=>({}),resolvePlatformProvider:()=>x.ctx.ESPN.provider,
+                applyHydrated:(hydrated,options)=>applied={hydrated,options},installStarterReqCorrection(){}});
+            vm.runInContext(src.slice(fn.start,fn.end),x.ctx);const request=x.ctx.loadLeagueDetails();
+            while(x.requests.length<2)await new Promise(resolve=>setTimeout(resolve,0));
+            if(mode==='account-switch')x.store.set('fw_session_v1',identity('account-b'));
+            if(mode==='closed-view')x.ctx.loadSeqRef.current++;
+            wait.resolve(rawLeague(mode==='foreign-season'?'2026':'2025'));await request;
+            if(mode==='valid'){assert.equal(applied.hydrated.rosters.length,2);assert.equal(applied.options.myRosterData.roster_id,'2');assert.equal(x.requests.length,3);assert.equal(error,undefined);}
+            else{assert.equal(applied,undefined,mode);assert.equal(x.requests.length,2,'invalid continuation must not request private transactions');assert.match(error,mode==='foreign-season'?/requested season/:/changed/);}
+            assert(x.requests.every(item=>item.options.headers.Authorization==='Bearer '+originalToken));
         }
     },
     async actualHubKeepsGoodDataOnFailureAndClearsInvalidAccount() {
