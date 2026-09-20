@@ -4515,6 +4515,7 @@
         // the retired analyzer surface so the persistent builder strip can reuse it (and so the
         // verdict math lives in one place). Pure function of builder state; no behavior change.
         function computeManualVerdict() {
+            const pickIssue = pickApi.selectionIssue(pickInventory, tradeOwner, tradePickIds);
             if (pickIssue) return { pickIssue, hasTrade: true, grade: null, totalA: 0, totalB: 0, userGain: 0,
                 verdictText: 'PICK VERIFICATION REQUIRED', diffDisplay: '', likelihood: null };
 
@@ -4667,21 +4668,26 @@
         }
 
         async function requestAlexVerdict(v, dealKey) {
-            if (v.pickIssue || pickIssue) return;
+            const account = pickAccount.current;
+            if (!pickApi.current(account)) return;
+            if (v.pickIssue || pickApi.selectionIssue(pickInventory, tradeOwner, tradePickIds)) return;
             setAlexVerdict({ loading: true, dealKey });
             try {
                 const result = await window.OD.callAI({ type: 'trade_verdict', context: buildTradeVerdictContext(v) });
+                if (!pickApi.current(account)) return;
                 setAlexVerdict({ text: result.analysis, dealKey });
                 const partnerName = (assessments.find(a => a.ownerId === v.otherOwnerId) || {}).ownerName;
                 if (typeof window.OD?.saveAIAnalysis === 'function') {
                     window.OD.saveAIAnalysis(leagueId, 'trade_verdict', partnerName ? `Trade Verdict vs ${partnerName}` : 'Trade Verdict', result.analysis).catch?.(() => {});
                 }
             } catch (e) {
+                if (!pickApi.current(account)) return;
                 setAlexVerdict({ error: e.message || 'Second opinion failed. Try again in a moment.', dealKey });
             }
         }
 
         function sendVerdictFeedback(action, dealKey) {
+            if (!pickApi.current(pickAccount.current)) return;
             setAlexVerdict(prev => prev && prev.dealKey === dealKey ? { ...prev, feedback: action } : prev);
             // Learning-loop capture — no-op until the AIFeedback helper ships.
             window.WR?.AIFeedback?.send?.({ leagueId, surface: 'trade_verdict', recId: dealKey, action });

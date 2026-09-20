@@ -4,6 +4,10 @@
     'use strict';
     const App = window.App = window.App || {};
     let boundary = 0;
+    const identities = new WeakMap(), connections = new WeakMap();
+    const connectionKey = league => JSON.stringify([league?._mflLeagueId, league?._platformCreds?.leagueId, league?._platformCreds?.year, league?._platformCreds?.apiKey]);
+    const bindEvidence = (result, snapshot, connection) => { identities.set(result, snapshot); connections.set(result, connection); return result; };
+    const validInventory = state => !!state && current(identities.get(state)) && connections.get(state) === connectionKey(state.league);
     const accountKeys = ['fw_session_v1', 'od_auth_v1', 'wr_guest_v1', 'od_session_v1'];
     window.addEventListener('storage', event => {
         if (!event.key || accountKeys.includes(event.key) || /^sb-.*-auth-token$/.test(event.key)) boundary++;
@@ -15,7 +19,13 @@
             : league?._yahoo || lid(league).startsWith('yahoo_') ? 'yahoo' : /^\d+$/.test(lid(league)) ? 'sleeper' : 'unknown';
     const contextKey = (league, rosters) => JSON.stringify([lid(league), league?.season, league?.status, league?.type, league?.league_type, league?._dhq_type_override, league?.settings, league?.metadata, league?.total_rosters, (rosters || []).map(r => [r?.roster_id, r?.owner_id, r?.league_id])]);
     const capture = () => { try { return { boundary, values: accountKeys.map(key => window.localStorage.getItem(key)) }; } catch (e) { return null; } };
-    const current = snapshot => { try { return !!snapshot && snapshot.boundary === boundary && accountKeys.every((key, i) => window.localStorage.getItem(key) === snapshot.values[i]); } catch (e) { return false; } };
+    const current = snapshot => {
+        if (!snapshot || snapshot.invalidated) return false;
+        try {
+            if (snapshot.boundary === boundary && accountKeys.every((key, i) => window.localStorage.getItem(key) === snapshot.values[i])) return true;
+        } catch (e) { /* unavailable identity storage fails closed */ }
+        snapshot.invalidated = true; return false;
+    };
     function empty(reason, status = 'unavailable') {
         return { status, byOwner: {}, coverage: { complete: false, reason }, slotMaps: {} };
     }
@@ -36,6 +46,7 @@
         if (!season || season < 2000 || season > 2200) throw new Error('The league draft season is unavailable.');
         const source = provider(league);
         const context = contextKey(league, rosters);
+        const connection = connectionKey(league);
         if (!['sleeper', 'mfl'].includes(source)) return { ...empty('This provider has not supplied verified draft-pick ownership.'), leagueId: lid(league), season };
         const controller = new AbortController();
         let timer;
@@ -54,7 +65,7 @@
                 const api = window.MFL;
                 if (!api?.fetchDraftStatus || !api?.fetchFutureDraftPicks) throw new Error('The MFL draft connection is unavailable.');
                 const id = String(league._mflLeagueId || league._platformCreds?.leagueId || '');
-                if (!/^\d+$/.test(id) || lid(league) !== 'mfl_' + id + '_' + season || (league._platformCreds?.year && Number(league._platformCreds.year) !== season)) throw new Error('The MFL league connection is incomplete.');
+                if (!/^\d+$/.test(id) || lid(league) !== 'mfl_' + id + '_' + season || (league._platformCreds?.leagueId != null && String(league._platformCreds.leagueId) !== id) || (league._platformCreds?.year != null && Number(league._platformCreds.year) !== season)) throw new Error('The MFL league connection is incomplete.');
                 const key = league._platformCreds?.apiKey || null;
                 // Both provider calls start under this snapshot; neither chains
                 // another private request after its reply. Never read global S.
@@ -91,14 +102,18 @@
             return { status: 'ready', context, leagueId: lid(league), season, source, league: { ...league, drafts }, tradedPicks };
         };
         try {
-            return await Promise.race([work(), new Promise((_, reject) => {
+            const result = await Promise.race([work(), new Promise((_, reject) => {
                 timer = setTimeout(() => { controller.abort(); reject(new Error('Draft-pick loading timed out. Retry to check current ownership.')); }, options.timeoutMs || 20000);
             })]);
+            check();
+            return bindEvidence(result, snapshot, connection);
         } finally { clearTimeout(timer); }
     }
     function inventory(league, rosters, evidence) {
         if (!evidence || evidence.leagueId !== lid(league) || evidence.season !== integer(league.season)) return empty('Checking draft-pick ownership…', 'loading');
         if (evidence.status !== 'ready') return empty(evidence.coverage?.reason || evidence.error || (evidence.status === 'loading' ? 'Checking draft-pick ownership…' : 'Draft-pick ownership is unavailable.'), evidence.status);
+        if (!current(identities.get(evidence))) return empty('The account changed. Reopen this league before checking picks.');
+        if (connections.get(evidence) !== connectionKey(league)) return empty('The league connection changed. Refresh picks.');
         if (evidence.context !== contextKey(league, rosters)) return empty('League settings or team ownership changed. Refresh picks.', 'loading');
         try {
             assertRosters(league, rosters);
@@ -147,13 +162,13 @@
                 }
                 if (Object.keys(map).length === rosters.length) slotMaps[Number(d.season)] = map;
             }
-            return { status: 'ready', byOwner, coverage, slotMaps, league: evidence.league };
+            return bindEvidence({ status: 'ready', byOwner, coverage, slotMaps, league: evidence.league }, identities.get(evidence), connections.get(evidence));
         } catch (error) { return empty(error.message); }
     }
     const pickId = pick => `PICK-${pick.year}-${pick.round}-${pick.fromRosterId}${pick.slot != null ? '-s' + pick.slot : ''}`;
-    function owns(state, owner, id) { return state?.status === 'ready' && (state.byOwner[String(owner)] || []).some(p => pickId(p) === id); }
+    function owns(state, owner, id) { return validInventory(state) && state?.status === 'ready' && (state.byOwner[String(owner)] || []).some(p => pickId(p) === id); }
     function priced(state, year) {
-        if (state?.coverage?.format !== 'dynasty') return false;
+        if (!validInventory(state) || state?.coverage?.format !== 'dynasty') return false;
         // A current startup pool is not a future rookie pick. Preserve accepted
         // dynasty prices; seasonal/startup valuation requires its own model.
         return Number(year) !== Number(state.league?.season) || !(state.league?.drafts || []).some(d => Number(d.season) === Number(year) && Number(d.settings?.player_type) === 0);

@@ -123,6 +123,26 @@ const tests = {
         assert.equal(result.coverage.complete, false); assert.equal(result.byOwner.a.length, 0);
         await assert.rejects(x.run({ ...l, _mflLeagueId: '55' }), /incomplete/);
     },
+    async readyEvidenceCannotOutliveSameDocumentAccount() {
+        const x = fixture(), l = league(), evidence = await x.api.load(l, rosters), result = x.api.inventory(l, rosters, evidence);
+        assert(x.api.owns(result, 'a', 'PICK-2026-1-1'));
+        x.storage.set('fw_session_v1', 'account-b'); // no storage event in the document that writes it
+        assert.equal(x.api.inventory(l, rosters, evidence).status, 'unavailable');
+        assert.equal(x.api.owns(result, 'a', 'PICK-2026-1-1'), false);
+        assert.equal(x.api.priced(result, 2027), false);
+        assert.match(x.api.selectionIssue(result, { A: 'a' }, { A: ['PICK-2026-1-1'] }), /no longer verified/);
+        x.storage.set('fw_session_v1', 'account-a'); assert.equal(x.api.owns(result, 'a', 'PICK-2026-1-1'), false, 'observed identity mismatch stays invalidated');
+    },
+    async mflExplicitCredentialsCannotConflictOrChangeUnderReadyData() {
+        const x = fixture(); let calls = 0;
+        x.ctx.MFL = { fetchDraftStatus: async () => { calls++; return []; }, fetchFutureDraftPicks: async () => { calls++; return { futureDraftPicks: { franchise: [] } }; } };
+        const l = league({ id: 'mfl_44_2026', _mfl: true, _mflLeagueId: '44', _platformCreds: { leagueId: '999', year: '2026', apiKey: 'fixture-secret' } });
+        await assert.rejects(x.api.load(l, rosters), /incomplete/); assert.equal(calls, 0);
+        l._platformCreds.leagueId = '44'; const evidence = await x.api.load(l, rosters); assert.equal(calls, 2);
+        const changed = { ...l, _platformCreds: { ...l._platformCreds, apiKey: 'replacement-secret' } };
+        assert.equal(x.api.inventory(changed, rosters, evidence).status, 'unavailable');
+        assert(!JSON.stringify(evidence).includes('replacement-secret'));
+    },
     async changedFormatOrOwnerCannotReuseReadyEvidence() {
         const x = fixture(), l = league(), evidence = await x.api.load(l, rosters);
         const nextFormat = { ...l, settings: { type: 0, draft_rounds: 4 } };
@@ -135,9 +155,10 @@ const tests = {
         const source = fs.readFileSync(path.join(root, 'js/trade-calc.js'), 'utf8');
         const babel = require('@babel/standalone'), declarations = {};
         babel.packages.traverse.default(babel.packages.parser.parse(source, { sourceType: 'script', plugins: ['jsx'] }), { FunctionDeclaration(p) { if (p.node.id) declarations[p.node.id.name] = source.slice(p.node.start, p.node.end); } });
-        x.ctx.pickIssue = 'Selected ownership unavailable';
+        x.ctx.pickInventory = inventory; x.ctx.pickApi = x.api; x.ctx.tradeOwner = { A: 'b' }; x.ctx.tradePickIds = { A: ['PICK-2026-1-1'] };
+        x.ctx.pickIssue = null;
         vm.runInContext(declarations.computeManualVerdict, x.ctx);
-        const verdict = x.ctx.computeManualVerdict(); assert.equal(verdict.pickIssue, x.ctx.pickIssue); assert.equal(verdict.grade, null); assert.equal(verdict.hasTrade, true);
+        const verdict = x.ctx.computeManualVerdict(); assert.match(verdict.pickIssue, /no longer verified/); assert.equal(verdict.grade, null); assert.equal(verdict.hasTrade, true);
         x.ctx.pickInventory = inventory; x.ctx.pickApi = x.api; x.ctx.picksByOwner = inventory.byOwner;
         x.ctx.pickAsset = p => ({ ...p, value: 10 }); x.ctx.comparePicksByDraftOrder = () => 0;
         vm.runInContext(declarations.pickAssetsForOwner, x.ctx); assert.equal(x.ctx.pickAssetsForOwner('a').length, 6 * 2);
@@ -149,6 +170,24 @@ const tests = {
         assert.equal(x.ctx.addPickRowToBuilder({ id: 'PICK-2026-1-2', rosterId: 2, ownerId: 'b' }), true);
         assert.equal(x.ctx.tradeOwner.B, 'b'); assert.equal(x.ctx.tradePickIds.B[0], 'PICK-2026-1-2');
         assert.equal(x.ctx.addPickRowToBuilder({ id: 'PICK-2026-1-1', rosterId: 2, ownerId: 'b' }), false);
+    },
+    async actualAiCompletionCannotSaveOldAccountAnalysis() {
+        for (const switchAccount of [false, true]) {
+            const x = fixture(), state = await x.run(), held = deferred(), saves = [], updates = [];
+            x.ctx.pickApi = x.api; x.ctx.pickInventory = state; x.ctx.tradeOwner = { A: 'a' }; x.ctx.tradePickIds = { A: [] };
+            x.ctx.pickAccount = { current: x.api.capture() }; x.ctx.setAlexVerdict = value => updates.push(value);
+            x.ctx.assessments = []; x.ctx.leagueId = league().id; x.ctx.buildTradeVerdictContext = () => ({ fixture: true });
+            x.ctx.OD = { callAI: () => held.promise, saveAIAnalysis: (...args) => { saves.push(args); return Promise.resolve(); } };
+            const source = fs.readFileSync(path.join(root, 'js/trade-calc.js'), 'utf8');
+            const start = source.indexOf('        async function requestAlexVerdict('), end = source.indexOf('        function sendVerdictFeedback(', start);
+            vm.runInContext(source.slice(start, end), x.ctx);
+            const request = x.ctx.requestAlexVerdict({}, 'fixture-deal');
+            if (switchAccount) x.storage.set('fw_session_v1', 'account-b');
+            held.resolve({ analysis: 'Account A fixture analysis' }); await request;
+            assert.equal(saves.length, switchAccount ? 0 : 1);
+            assert.equal(updates.filter(update => update.text).length, switchAccount ? 0 : 1);
+            if (switchAccount) { const before = updates.length; await x.ctx.requestAlexVerdict({}, 'later'); assert.equal(updates.length, before); }
+        }
     },
     async staleSelectionRequiresRetryButPreservesIntent() {
         const x = fixture(), result = await x.run(), selections = { A: ['PICK-2026-1-1'], B: [] };
