@@ -829,7 +829,7 @@ test('google oauth callback stores the full user record (id included)',
     // getAppSession() refuses sessions without user.id — rebuilding the user
     // object as {email, displayName} silently locks Google accounts to free.
     ok(landing.includes('FRESH_OAUTH_RETURN'), 'oauth callback must re-sync on fresh returns');
-    ok(landing.includes('Object.assign({}, appSession.user || {}'), 'oauth callback must keep the whole user record');
+    ok(landing.includes('Object.assign({}, appSession.user,'), 'oauth callback must keep the whole user record');
   });
 
 // (The 'session issuers share one entitlements helper' test lives in the dev
@@ -984,7 +984,7 @@ test('league hub brand icon returns to the app front page, which stays put',
     ok(landing.includes('if (signup) resetDeviceOnboardingForNewAccount()'), 'email signup must reset onboarding memory');
     // A fresh OAuth return must never be hijacked by the existing-session
     // redirect before the sync/repair completes.
-    ok(landing.includes('if (FRESH_OAUTH_RETURN) return;'), 'checkSession must yield to the OAuth callback');
+    ok(landing.includes('if (FRESH_OAUTH_RETURN || OAUTH_RETURN_ERROR) return;'), 'checkSession must yield to the OAuth callback');
   });
 
 test('deploy build stamps the shared-loader cache version',
