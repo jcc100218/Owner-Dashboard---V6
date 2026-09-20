@@ -411,7 +411,7 @@
 
     // ── League Room masthead — DHQ crest, club identity, motto, actions ──
     // Module-level (stable identity) so motto-edit state survives hub re-renders.
-    function LeagueRoomMasthead({ username, leagueCount, onOpenSettings }) {
+    function LeagueRoomMasthead({ username, leagueCount, coverageIncomplete, onOpenSettings }) {
         const [club, setClub] = useOwnerClub();
         const tier = useResolvedTier();
         const isPaid = tier !== 'free';
@@ -482,7 +482,7 @@
                     <div style={{ marginTop: '11px', display: 'flex', gap: '14px', flexWrap: 'wrap', alignItems: 'center', fontFamily: 'var(--font-mono)', fontSize: '0.64rem', letterSpacing: '0.1em', color: 'var(--silver)' }}>
                         <OwnerAvatarBadge club={club} size={22} />
                         <span style={metaSpan}>EST <b style={{ color: 'var(--gold)', fontWeight: 700 }}>{estYear}</b></span>
-                        <span style={metaSpan}><b style={{ color: 'var(--gold)', fontWeight: 700 }}>{leagueCount}</b> FRANCHISE{leagueCount === 1 ? '' : 'S'}</span>
+                        <span style={metaSpan}><b style={{ color: 'var(--gold)', fontWeight: 700 }}>{leagueCount}</b> {coverageIncomplete ? 'LOADED FRANCHISE' : 'FRANCHISE'}{leagueCount === 1 ? '' : 'S'}</span>
                         {username && <span style={metaSpan}>SLEEPER <b style={{ color: 'var(--gold)', fontWeight: 700 }}>@{String(username).toUpperCase()}</b></span>}
                         {!club.showTitles && (
                             <button onClick={() => setClub({ showTitles: true })} title="Show your championship titles"
@@ -831,6 +831,11 @@
         const [sleeperUser, setSleeperUser] = useState(null);
         const [selectedYear, setSelectedYear] = useState('2026');
         const [sleeperLeagues, setSleeperLeagues] = useState([]);
+        const portfolioApi = window.App.PublicPortfolio;
+        const portfolioAccount = React.useRef(portfolioApi.capture());
+        const [portfolioAccountChanged, setPortfolioAccountChanged] = useState(false);
+        const sleeperSnapshotRef = React.useRef(null);
+        const [sleeperCoverage, setSleeperCoverage] = useState({ status: 'idle', knownCount: null, loadedCount: 0 });
         const [activeLeagueId, setActiveLeagueId] = useState(null);
         const [selectedLeague, setSelectedLeague] = useState(null);
         const [proMode, setProMode] = useState(false); // Empire Dashboard mode
@@ -880,6 +885,7 @@
         useEffect(() => {
             if (window.OD?.loadDisplayName) {
                 window.OD.loadDisplayName().then(name => {
+                    if (!portfolioApi.current(portfolioAccount.current)) return;
                     if (name) { setCustomDisplayName(name); localStorage.setItem('od_display_name', name); }
                 }).catch(err => window.wrLog('app.loadDisplayName', err));
             }
@@ -1083,135 +1089,61 @@
             return () => { alive = false; };
         }, []);
 
-        async function loadSleeperData() {
-            setLoading(true);
-            setError(null);
-            setSleeperLeagues([]);
-
-            try {
-                const user = await fetchSleeperUser(sleeperUsername);
-                if (!user) {
-                    setError("Couldn't find that Sleeper username — check spelling and try again");
-                    setLoading(false);
-                    return;
-                }
-                setSleeperUser(user);
-
-                const leagues = (await fetchUserLeagues(user.user_id, selectedYear)) || [];
-                if (!leagues.length) { setSleeperLeagues([]); setLoading(false); hubSyncedAtRef.current = Date.now(); return; }
-
-                // Stream each league's full details into state as it resolves, preserving
-                // the original order, instead of awaiting the slowest league via a single
-                // Promise.all. The hub paints fast leagues immediately rather than blocking
-                // on the slowest one. Each streamed entry is always complete (never a
-                // partial skeleton), so opening a card is safe. `loading` stays true until
-                // every league settles, which preserves the deep-link routing guards below.
-                const byId = new Map();
-                const orderedBuilt = () => leagues.map(lg => byId.get(lg.league_id)).filter(Boolean);
-
-                await Promise.all(
-                    leagues.map(async (league) => {
-                        try {
-                            const [rosters, users] = await Promise.all([
-                                fetchLeagueRosters(league.league_id),
-                                fetchLeagueUsers(league.league_id)
-                            ]);
-
-                            const myRoster = rosters.find(r => r.owner_id === user.user_id);
-
-                            byId.set(league.league_id, {
-                                id: league.league_id,
-                                name: league.name,
-                                wins: myRoster?.settings?.wins || 0,
-                                losses: myRoster?.settings?.losses || 0,
-                                ties: myRoster?.settings?.ties || 0,
-                                season: selectedYear,
-                                // 'pre_draft' | 'drafting' | 'in_season' | 'complete' — lets
-                                // hub surfaces tell an upcoming draft from a finished one.
-                                status: league.status || null,
-                                // Sleeper league avatar id — card art fallback chain.
-                                avatar: league.avatar || null,
-                                scoring_settings: league.scoring_settings || {},
-                                roster_positions: league.roster_positions || [],
-                                settings: league.settings || {},
-                                rosters,
-                                users
-                            });
-                        } catch (e) {
-                            console.error(`Failed to load league ${league.name}:`, e);
-                        } finally {
-                            // Re-render with everything loaded so far, in original order.
-                            setSleeperLeagues(orderedBuilt());
-                        }
-                    })
-                );
-
-                hubSyncedAtRef.current = Date.now();
-                setLoading(false);
-            } catch (err) {
-                console.error('Failed to load Sleeper data:', err);
-                setError('Failed to load Sleeper data. Please refresh.');
-                setLoading(false);
-            }
+        // Initial, selected-year and return-to-hub refresh share a stream of
+        // complete cards plus coverage. A failed request never becomes zero holdings.
+        function clearChangedPortfolio() {
+            setPortfolioAccountChanged(true); setError(null);
+            hubRevalidatingRef.current = null; sleeperSnapshotRef.current = null;
+            setSleeperLeagues([]); setSleeperUser(null); setLoading(false);
+            setSleeperCoverage({ status: 'error', knownCount: null, loadedCount: 0,
+                error: 'Your account changed. Reload to open the current account.' });
         }
-
-        // Background hub revalidation — non-destructive loadSleeperData variant.
-        // The return-to-hub freshness check must never yank a working franchise
-        // picker: no loading/error toggles, no upfront sleeperLeagues clear.
-        // Fresh data replaces state only on success; any failure (user lookup,
-        // league list, per-league detail) silently keeps what's already on
-        // screen and console.warns. Initial + year-change loads keep using
-        // loadSleeperData's destructive reset.
-        async function revalidateSleeperData() {
-            if (hubRevalidatingRef.current) return;
-            hubRevalidatingRef.current = true;
-            try {
-                const user = await fetchSleeperUser(sleeperUsername);
-                if (!user) { console.warn('Hub revalidation: Sleeper user lookup failed — keeping cached leagues'); return; }
-                setSleeperUser(user);
-                const leagues = (await fetchUserLeagues(user.user_id, selectedYear)) || [];
-                if (!leagues.length) { console.warn('Hub revalidation: no leagues returned — keeping cached leagues'); return; }
-                const byId = new Map();
-                await Promise.all(
-                    leagues.map(async (league) => {
-                        try {
-                            const [rosters, users] = await Promise.all([
-                                fetchLeagueRosters(league.league_id),
-                                fetchLeagueUsers(league.league_id)
-                            ]);
-                            const myRoster = rosters.find(r => r.owner_id === user.user_id);
-                            byId.set(league.league_id, {
-                                id: league.league_id,
-                                name: league.name,
-                                wins: myRoster?.settings?.wins || 0,
-                                losses: myRoster?.settings?.losses || 0,
-                                ties: myRoster?.settings?.ties || 0,
-                                season: selectedYear,
-                                avatar: league.avatar || null,
-                                scoring_settings: league.scoring_settings || {},
-                                roster_positions: league.roster_positions || [],
-                                settings: league.settings || {},
-                                rosters,
-                                users
-                            });
-                        } catch (e) {
-                            console.warn(`Hub revalidation: failed to refresh league ${league.name} — keeping cached copy:`, e);
-                        }
-                    })
-                );
-                // Single swap at the end: fresh entries where the refetch worked,
-                // the existing card where it didn't — a league never disappears
-                // because one background request hiccupped.
-                setSleeperLeagues(prev => leagues
-                    .map(lg => byId.get(lg.league_id) || (prev || []).find(p => String(p.id) === String(lg.league_id)))
-                    .filter(Boolean));
-                hubSyncedAtRef.current = Date.now();
-            } catch (err) {
-                console.warn('Hub revalidation failed — keeping cached league data:', err);
-            } finally {
-                hubRevalidatingRef.current = false;
-            }
+        function syncSleeperPortfolio() {
+            const account = portfolioAccount.current;
+            if (!portfolioApi.current(account)) { clearChangedPortfolio(); return Promise.resolve(null); }
+            const contextKey = String(sleeperUsername).toLowerCase() + ':' + String(selectedYear);
+            if (hubRevalidatingRef.current?.contextKey === contextKey) return hubRevalidatingRef.current.promise;
+            const request = { contextKey, promise: null };
+            hubRevalidatingRef.current = request;
+            const active = () => hubRevalidatingRef.current === request && portfolioApi.current(account);
+            setLoading(true); setError(null);
+            if (sleeperSnapshotRef.current?.contextKey !== contextKey) {
+                setSleeperLeagues([]); setSleeperUser(null);
+                setSleeperCoverage({ status: 'loading', knownCount: null, loadedCount: 0 });
+            } else setSleeperCoverage(previous => ({ ...previous, status: 'loading' }));
+            const apply = snapshot => {
+                if (!active()) return;
+                sleeperSnapshotRef.current = snapshot;
+                setSleeperUser(snapshot.user); setSleeperLeagues(snapshot.leagues);
+                setSleeperCoverage(snapshot.coverage); setError(snapshot.coverage.listVerified ? null : snapshot.coverage.error);
+            };
+            request.promise = portfolioApi.fetchSleeperPortfolio({ username: sleeperUsername, season: selectedYear,
+                identity: account, previous: sleeperSnapshotRef.current, isCurrent: active, onProgress: apply })
+                .then(snapshot => {
+                    if (!active()) return null;
+                    apply(snapshot);
+                    if (snapshot.coverage.status === 'ready') hubSyncedAtRef.current = Date.now();
+                    return snapshot;
+                }).catch(failure => {
+                    if (active()) { setError(failure.message); setSleeperCoverage(previous => ({ ...previous, status: 'error', error: failure.message })); }
+                    return null;
+                }).finally(() => {
+                    if (hubRevalidatingRef.current !== request) return;
+                    hubRevalidatingRef.current = null;
+                    if (portfolioApi.current(account)) setLoading(false);
+                    else clearChangedPortfolio();
+                });
+            return request.promise;
         }
+        function loadSleeperData() { return syncSleeperPortfolio(); }
+        function revalidateSleeperData() { return syncSleeperPortfolio(); }
+        useEffect(() => {
+            const invalidate = () => {
+                if (!portfolioApi.current(portfolioAccount.current)) clearChangedPortfolio();
+            };
+            window.addEventListener('storage', invalidate);
+            return () => { window.removeEventListener('storage', invalidate); hubRevalidatingRef.current = null; };
+        }, []);
 
         // Hub freshness (audit:refresh-stale step 10): league cards load once per
         // year selection and then sit stale for the whole session. When the user
@@ -1329,7 +1261,8 @@
             const league = allLeagues.find(l => String(l.id) === String(route.leagueId));
             if (!league) {
                 if (String(route.leagueId).startsWith('espn_')) return;
-                if (!loading) initialRouteAppliedRef.current = true;
+                const knownPending = sleeperCoverage.knownLeagues?.some(item => String(item.id) === String(route.leagueId));
+                if (!loading && !knownPending && sleeperCoverage.status === 'ready') initialRouteAppliedRef.current = true;
                 return;
             }
             initialRouteAppliedRef.current = true;
@@ -1349,7 +1282,7 @@
                 routeUrl(buildHash(league.id, routeEntryTab))
             );
             setTimeout(() => { isNavigatingRef.current = false; }, 0);
-        }, [loading, sleeperLeagues, espnLeagues, mflLeagues, espnConnecting]);
+        }, [loading, sleeperLeagues, espnLeagues, mflLeagues, espnConnecting, sleeperCoverage]);
 
         // Show Empire Dashboard (Pro mode)
         // global-view.js is a deferred module group (see js/module-loader.js); load it
@@ -1472,6 +1405,11 @@
                 } catch (e) { console.warn('[Empire] Data load error:', e); setEmpirePlayersLoaded(true); }
             })();
         }, [proMode, empirePlayersLoaded]);
+
+        if (portfolioAccountChanged) return <main style={{ padding: '48px 20px', maxWidth: '600px', margin: '0 auto', fontSize: '16px', lineHeight: 1.5 }}>
+            <h1>Your account changed</h1><p>Reload to open the current account. Previous portfolio results have been cleared.</p>
+            <button type="button" onClick={() => window.location.reload()} style={{ minHeight: '44px', padding: '10px 16px', font: 'inherit' }}>Reload current account</button>
+        </main>;
 
         // Defense-in-depth: Empire is sandbox-only — even if stale history state or
         // a stray caller flips proMode on in production, never mount the surface.
@@ -1675,7 +1613,7 @@
             // cards start arriving we render them live and show a "loading more" hint.
             if (loading && sleeperLeagues.length === 0) return <div style={{ padding: '1rem', textAlign: 'center', color: 'var(--silver)', fontSize: 'var(--text-body, 1rem)' }}>Loading leagues...</div>;
             if (error && sleeperLeagues.length === 0) return <div style={{ padding: '0.75rem', textAlign: 'center', color: 'var(--k-e74c3c, #e74c3c)', fontSize: 'var(--text-body, 1rem)' }}>{error}</div>;
-            if (!loading && sleeperLeagues.length === 0) return <div style={{ padding: '1rem', textAlign: 'center', color: 'var(--silver)', fontSize: 'var(--text-body, 1rem)' }}>No leagues found for {selectedYear}</div>;
+            if (!loading && sleeperLeagues.length === 0) return <div style={{ padding: '1rem', textAlign: 'center', color: 'var(--silver)', fontSize: 'var(--text-body, 1rem)' }}>{sleeperCoverage.listVerified && sleeperCoverage.knownCount === 0 ? 'No leagues found for ' + selectedYear : 'League details are unavailable. Retry league sync above.'}</div>;
 
             return (
                 <div className="hub-league-selector">
@@ -1764,7 +1702,7 @@
                                     <span style={{ fontFamily: 'var(--font-title)', fontWeight: 700, fontSize: '1.15rem', letterSpacing: '.08em', color: 'var(--gold)' }}>EMPIRE COMMAND</span>
                                     <span style={{ fontFamily: 'var(--font-mono)', fontSize: '0.7rem', fontWeight: 700, letterSpacing: '.06em', color: 'var(--black)', background: 'var(--gold)', borderRadius: '5px', padding: '1px 6px' }}>PRO</span>
                                 </div>
-                                <div style={{ fontSize: 'var(--text-label, 0.8rem)', color: 'var(--silver)', marginTop: '4px' }}>All {leagues.length} league{leagues.length !== 1 ? 's' : ''} in one terminal · cross-league trade intelligence</div>
+                                <div style={{ fontSize: 'var(--text-label, 0.8rem)', color: 'var(--silver)', marginTop: '4px' }}>{sleeperUsername && sleeperCoverage.status !== 'ready' ? 'Loaded ' : 'All '}{leagues.length} league{leagues.length !== 1 ? 's' : ''} in one terminal · cross-league trade intelligence</div>
                             </div>
                             <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="var(--gold)" strokeWidth="2" style={{ flexShrink: 0, opacity: 0.7 }}><polyline points="9 18 15 12 9 6"/></svg>
                         </div>
@@ -1838,6 +1776,7 @@
                                         <div style={{ flex: 1, minWidth: 0 }}>
                                             <div style={{ display: 'flex', alignItems: 'center', gap: '7px' }}>
                                                 <span style={{ fontSize: 'var(--text-body, 1rem)', fontWeight: 600, color: 'var(--white)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{title}</span>
+                                                {l._portfolioStale && <span style={{ fontSize: '12px', color: 'var(--gold)', flexShrink: 0 }}>Saved data</span>}
                                                 {isLast && <span style={{ fontFamily: 'var(--font-mono)', fontSize: '0.65rem', fontWeight: 600, color: 'var(--gold)', border: '1px solid var(--acc-line2, rgba(212,175,55,0.3))', borderRadius: '4px', padding: '0 4px', flexShrink: 0 }}>LAST</span>}
                                             </div>
                                             {sub && <div style={{ fontSize: 'var(--text-label, 0.75rem)', color: 'var(--silver)', marginTop: '2px', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{sub}</div>}
@@ -2123,10 +2062,18 @@
                     <LeagueRoomMasthead
                         username={sleeperUsername}
                         leagueCount={allLeagues.length}
+                        coverageIncomplete={sleeperCoverage.status !== 'ready'}
                         onOpenSettings={() => setShowOwnerSettings(true)}
                     />
                 )}
                 {sleeperUsername && <ChampionshipBanners titles={ownerTitles} />}
+                {sleeperUsername && sleeperCoverage.status !== 'idle' && <section aria-label="Sleeper league sync" style={{ margin: '12px', padding: '12px', border: '1px solid var(--acc-line1)', borderRadius: '8px', fontSize: '14px', lineHeight: 1.45 }}>
+                    <div role="status">{portfolioApi.leagueCoverage(sleeperCoverage)}</div>
+                    {sleeperCoverage.error && <div>{sleeperCoverage.error}</div>}
+                    {!!sleeperCoverage.unavailable?.length && <details><summary style={{ minHeight: '44px', paddingTop: '10px' }}>Leagues awaiting data</summary><ul>{sleeperCoverage.unavailable.map(league => <li key={league.id}>{league.name}</li>)}</ul></details>}
+                    <button type="button" disabled={loading} onClick={() => portfolioApi.current(portfolioAccount.current) ? loadSleeperData() : window.location.reload()} style={{ minHeight: '44px', padding: '8px 12px', marginTop: '6px', font: 'inherit', color: 'var(--gold)', background: 'transparent', border: '1px solid currentColor', borderRadius: '6px' }}>{loading ? 'Syncing leagues…' : portfolioApi.current(portfolioAccount.current) ? 'Refresh leagues' : 'Reload current account'}</button>
+                </section>}
+
 
                 {(espnConnecting || espnError || espnChoiceLeague || visibleEspnLeagues.length > 0) && (
                     <section className="hub-franchise-picker" aria-label="ESPN connection" style={{ margin: '12px', padding: '14px', border: '1px solid var(--acc-line1)', borderRadius: '12px' }}>

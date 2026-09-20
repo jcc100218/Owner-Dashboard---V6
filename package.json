@@ -20,7 +20,8 @@
     "test:landing-session": "node tests/landing-session-lifecycle.cjs && node tests/landing-session-browser.cjs",
     "test:connect": "node tests/public-connect.cjs && node tests/public-connect-browser.cjs",
     "test:web-billing": "node tests/web-billing-client.cjs && node tests/web-billing-browser.cjs",
-    "test:trade-picks": "node tests/trade-pick-inventory.cjs && node tests/trade-pick-browser.cjs"
+    "test:trade-picks": "node tests/trade-pick-inventory.cjs && node tests/trade-pick-browser.cjs",
+    "test:public-portfolio": "node tests/public-portfolio.cjs && node tests/public-portfolio-browser.cjs"
   },
   "keywords": [
     "fantasy",
