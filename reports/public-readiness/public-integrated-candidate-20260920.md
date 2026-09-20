@@ -27,3 +27,15 @@ The browser's LeagueDetail renderer remains a declared handoff fixture; the real
 ### Connection browser teardown correction
 
 The first combined connection run printed all18 source groups and all4 browser scenarios but failed to exit during cleanup. Its deliberately deferred Sleeper fixture could leave a route promise pending. Root stopped only that exact owned test process/tree, preserved the original log, and now releases every outstanding fixture response before context/final cleanup. Assertions, production source and external-request restrictions are unchanged. A fresh full `npm run test:connect` completed all18+4 checks and exited0. The fixture cleanup correction receives separate independent review. [Original run](evidence/public-connect-browser-teardown-original-sep20.log), [clean rerun](evidence/public-espn-integrated-connect-sep20.log).
+
+## Trade Center integration checkpoint
+
+Integrated reviewed Trade Center source`cd85e24`/`2ed0274` as`9236b6d`/`4451be2`, then independent report`ed599bc` as`9db96a2`. The additive package conflict retained every earlier test script. Trade source and focused tests match the final reviewed branch byte-for-byte after hooks.
+
+Root assembled a separate canonical integration checkout `/Users/jacobc/Projects/dhq-shared-readiness-integrated`, branch`codex/public-readiness-shared-integration-20260920`, revision`167db1b`, from actualdedbb161. It combines reviewed capital4880edd/4d6ef17, ESPNd45b5f5 and Yahoo initiation2ba9248 without changing any canonical main or consumer release pin. Root reran19 capital,18 ESPN and14 Yahoo protocol groups on that combined tree; all pass.
+
+Public candidate`9db96a2` built against those exact combined bytes:71 compiled scripts,198 existing tests,22 actual Trade Center model/provider/caller groups and3 phone/landscape Chrome journeys, then16 ESPN groups and3 Chrome hub journeys all pass with clean process exit. Logs:`evidence/public-trade-integrated-{build,existing,picks,espn}-sep20.log`. Account/billing/connection gates already passed the preceding integrated ESPN candidate; no relevant auth source changed in this Trade Center delta.
+
+This remains a draft proposal. [Canonical capital PR20](https://github.com/skjjcruz/DHQ-Shared/pull/20) and [ESPN PR21](https://github.com/skjjcruz/DHQ-Shared/pull/21) must be coordinated into an exact canonical release/pin; Yahoo protocol remains separately coordinated with its Scout/provider gate and new data-context follow-up. The normal consumer dependency stilldedbb161. No actualpublic/shared/native main or site was deployed.
+
+Known required follow-through: portfolio incompleteness and late-account publication are being repaired separately; seasonal/startup pick pricing, global assessment input completeness, full authenticated Trade Center save/reopen/AI flow and actual private-provider proof remain open. Unpriced seasonal picks are disclosed as unavailable and do not receive invented dynasty prices. This repair does not remove those launch requirements.
