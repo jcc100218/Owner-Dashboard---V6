@@ -39,6 +39,7 @@
 // working tree stays clean.
 
 const fs = require('fs');
+const os = require('os');
 const path = require('path');
 const crypto = require('crypto');
 const { execFileSync } = require('child_process');
@@ -66,6 +67,25 @@ const NEVER_SHIP = ['CNAME', '.nojekyll'];
 
 // The Lab's own plumbing — the only things this script never touches.
 const LAB_KEEP = new Set(['.git', '.github', '.nojekyll', 'robots.txt', 'README.md']);
+// Lab-only work from other sessions lives beside the mirror and must survive
+// every publish (the Matchup Grades lab, Sep 2026: its page, engine, feeds,
+// snapshot data and job). Matching files are set aside before the wipe and
+// put back after the overlay, untouched — no gate, no tag, no rewrite.
+const LAB_PRESERVE = [
+  /^matchup-lab\.html$/,
+  /^data\//,
+  /^scripts\//,
+  /^js\/shared\/(matchup-|MATCHUP-)/,
+];
+function walk(dir, base, out) {
+  for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+    if (entry.name === '.git') continue;
+    const rel = base ? base + '/' + entry.name : entry.name;
+    if (entry.isDirectory()) walk(path.join(dir, entry.name), rel, out);
+    else out.push(rel);
+  }
+  return out;
+}
 
 function log(msg) { console.log('[publish-lab] ' + msg); }
 function fail(msg) { console.error('[publish-lab] ' + msg); process.exit(1); }
@@ -100,6 +120,12 @@ const loaderStamped = read(loaderPath);
 fs.writeFileSync(loaderPath, loaderBefore, 'utf8');
 
 // ── 3. wipe the Lab, keep its plumbing ─────────────────────────────────────
+const preserved = walk(LAB_DIR, '', []).filter(rel => LAB_PRESERVE.some(re => re.test(rel)));
+const stash = fs.mkdtempSync(path.join(os.tmpdir(), 'lab-preserve-'));
+for (const rel of preserved) {
+  fs.mkdirSync(path.dirname(path.join(stash, rel)), { recursive: true });
+  fs.copyFileSync(path.join(LAB_DIR, rel), path.join(stash, rel));
+}
 const removed = [];
 for (const entry of fs.readdirSync(LAB_DIR)) {
   if (LAB_KEEP.has(entry)) continue;
@@ -172,6 +198,14 @@ for (const entry of fs.readdirSync(LAB_DIR)) {
   gated++;
 }
 fs.copyFileSync(path.join(LAB_DIR, 'index.html'), path.join(LAB_DIR, 'trade-lab.html'));
+
+// ── 6. put the other sessions' Lab-only work back, byte for byte ───────────
+for (const rel of preserved) {
+  fs.mkdirSync(path.dirname(path.join(LAB_DIR, rel)), { recursive: true });
+  fs.copyFileSync(path.join(stash, rel), path.join(LAB_DIR, rel));
+}
+fs.rmSync(stash, { recursive: true, force: true });
+if (preserved.length) log('preserved ' + preserved.length + ' Lab-only files (' + preserved.slice(0, 6).join(', ') + (preserved.length > 6 ? ', …' : '') + ')');
 
 const tag = (read(path.join(LAB_DIR, 'index.html')).match(/id="dhq-build-tag"[^>]*>([^<]*)</) || [])[1];
 log('gated ' + gated + ' pages; app page tagged "' + tag + '"; trade-lab.html = index.html');
