@@ -49,3 +49,5 @@ This closes the bounded cold-start/foreign-value dependency, **not Empire launch
 5. Root must integrate/review this branch, update shared/script release metadata coherently, and verify the actual supported Empire destination. No live, authenticated real-league, native-install or physical-device evidence is added by these fixtures.
 
 The canonical current market-engine switch, one-brain policy and injury handling remain untouched. Root's source review and final integrated/release checks are the next integration gates.
+
+20:06UTC root independent review: source67cfdd6 reviewed and all14 actual consumer groups +3 actual UI/canonical Chrome viewports rerun independently, all pass. Inspected320 first-screen rendering. No unresolved material finding within the bounded per-league consumer fix. Broader open launch gates above remain. Integrated source8ed3fda is documented in `integrated-mfl-empire-20260920.md`; no release/pin claim.
