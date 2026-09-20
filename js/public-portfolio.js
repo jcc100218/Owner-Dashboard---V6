@@ -33,7 +33,8 @@
         const identity = options.identity || capture();
         const isCurrent = () => current(identity) && (!options.isCurrent || options.isCurrent());
         const check = () => { if (!isCurrent()) throw new Error('Portfolio context changed. Reopen the current account or season.'); };
-        const contextKey = String(username).toLowerCase() + ':' + String(season);
+        const identifier = String(username || '').trim();
+        const contextKey = identifier.toLowerCase() + ':' + String(season);
         let previous = options.previous?.contextKey === contextKey && current(identities.get(options.previous)) ? options.previous : {};
         const fetcher = options.fetcher || window.fetch.bind(window);
         const publish = value => { check(); const result = bind(value, identity); onProgress(result); return result; };
@@ -56,12 +57,15 @@
             } finally { clearTimeout(timer); }
         }
         check();
-        if (!String(username || '').trim() || !/^\d{4}$/.test(String(season))) throw new Error('Select a connected account and league season.');
+        if (!identifier || !/^\d{4}$/.test(String(season))) throw new Error('Select a connected account and league season.');
         let user, listed, userVerified = false;
         try {
-            user = await read('user/' + encodeURIComponent(username));
+            user = await read('user/' + encodeURIComponent(identifier));
             if (user === null) throw new Error('SLEEPER_USER_NOT_FOUND');
             if (typeof user?.user_id !== 'string' || !/^\d+$/.test(user.user_id) || typeof user.username !== 'string' || !user.username.trim()) throw new Error('Invalid Sleeper user response');
+            // Sleeper accepts an exact user ID or a case-insensitive username. A
+            // well-shaped response for a different person is not this connection.
+            if (user.user_id !== identifier && user.username.toLowerCase() !== identifier.toLowerCase()) throw new Error('Sleeper user does not match the requested connection');
             userVerified = true;
             if (previous.user?.user_id && previous.user.user_id !== user.user_id) previous = {};
             listed = await read('user/' + encodeURIComponent(user.user_id) + '/leagues/nfl/' + encodeURIComponent(season));
@@ -97,20 +101,24 @@
             const id = String(league.league_id);
             try {
                 const [rosters, users] = await Promise.all([read('league/' + encodeURIComponent(id) + '/rosters'), read('league/' + encodeURIComponent(id) + '/users')]);
+                const nullIsKnownEmpty = ['pre_draft', 'drafting'].includes(league.status);
                 if (!Array.isArray(rosters) || !Array.isArray(users) || !rosters.length
                     || (league.total_rosters != null && Number(league.total_rosters) !== rosters.length)
                     || new Set(rosters.map(r => String(r?.roster_id))).size !== rosters.length
                     || new Set(users.map(u => u?.user_id)).size !== users.length
                     || users.some(u => typeof u?.user_id !== 'string' || !/^\d+$/.test(u.user_id))
                     || rosters.some(r => !r || !Number.isInteger(Number(r.roster_id)) || Number(r.roster_id) < 1
-                        || (r.league_id && String(r.league_id) !== id) || (r.players != null && !Array.isArray(r.players))
+                        || (r.league_id && String(r.league_id) !== id)
+                        || (!Array.isArray(r.players) && !(r.players === null && nullIsKnownEmpty))
                         || (r.owner_id && !users.some(u => u.user_id === r.owner_id)))) throw new Error('Invalid or incomplete league details');
                 const mine = rosters.find(roster => String(roster.owner_id) === user.user_id || (roster.co_owners || []).map(String).includes(user.user_id));
                 fresh.set(id, { ...league, id, league_id: id, name: league.name, status: league.status || '', season: String(season),
                     myRosterId: mine?.roster_id ?? null,
                     wins: mine?.settings?.wins ?? null, losses: mine?.settings?.losses ?? null, ties: mine?.settings?.ties ?? null,
                     scoring_settings: league.scoring_settings || {}, roster_positions: league.roster_positions || [],
-                    settings: league.settings || {}, rosters, users, _portfolioStale: false });
+                    settings: league.settings || {}, rosters: rosters.map(roster => ({ ...roster,
+                        players: roster.players === null ? [] : roster.players,
+                        _portfolioPlayersEvidence: roster.players === null ? 'pre-draft-empty' : 'provided' })), users, _portfolioStale: false });
             } catch (_) { failed.add(id); }
             finally { pending.delete(id); if (isCurrent()) publish(snapshot()); }
         }));
