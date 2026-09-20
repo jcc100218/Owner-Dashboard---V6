@@ -852,6 +852,11 @@
         // ESPN state
         const [espnLeagues, setEspnLeagues] = useState([]);
         const [espnConnecting, setEspnConnecting] = useState(false);
+        const [espnChoiceLeague, setEspnChoiceLeague] = useState(null);
+        const [espnS2Input, setEspnS2Input] = useState('');
+        const [espnSwidInput, setEspnSwidInput] = useState('');
+        const espnRequestRef = React.useRef(0);
+        const espnPageRef = React.useRef(null);
         // MFL state
         const [mflLeagues, setMflLeagues] = useState([]);
         const [mflConnecting, setMflConnecting] = useState(false);
@@ -925,6 +930,49 @@
         useEffect(() => {
             if (sleeperUsername) loadSleeperData();
         }, [selectedYear]);
+
+        async function loadEspnData(connection) {
+            const request = ++espnRequestRef.current;
+            setEspnConnecting(true); setEspnError(null);
+            try {
+                if (!window.App.EspnHub.isCurrent(espnPageRef.current)) throw new Error('Your account or ESPN connection changed. Reload to continue with the current account.');
+                const league = await window.App.EspnHub.load(connection);
+                if (request !== espnRequestRef.current || !window.App.EspnHub.isLeagueCurrent(league)) return;
+                espnPageRef.current = window.App.EspnHub.capture();
+                setEspnLeagues(prev => [...prev.filter(l => l.id !== league.id), league]);
+                if (!league._espnTeamId) setEspnChoiceLeague(league);
+                else setEspnChoiceLeague(prev => prev?.id === league.id ? null : prev);
+            } catch (e) {
+                if (request === espnRequestRef.current) {
+                    if (!window.App.EspnHub.isCurrent(espnPageRef.current)) { setEspnLeagues([]); setEspnChoiceLeague(null); setEspnS2Input(''); setEspnSwidInput(''); }
+                    setEspnError(e.message || 'ESPN could not be loaded. Try again.');
+                }
+            } finally { if (request === espnRequestRef.current) setEspnConnecting(false); }
+        }
+        useEffect(() => {
+            try { espnPageRef.current = window.App.EspnHub.capture(); if (window.App.EspnHub.readSaved()) loadEspnData(); }
+            catch (e) { setEspnError(e.message || 'The saved ESPN connection could not be read.'); }
+            function changed(event) {
+                if (event.key && !['fw_session_v1', 'od_auth_v1', 'wr_guest_v1', 'espn_league_id', 'espn_year'].includes(event.key) && !/^sb-.*-auth-token$/.test(event.key)) return;
+                espnRequestRef.current++;
+                setEspnLeagues([]); setEspnChoiceLeague(null); setEspnConnecting(false);
+                setEspnS2Input(''); setEspnSwidInput('');
+                setSelectedLeague(previous => previous?._espn ? null : previous);
+                setEspnError('Your account or ESPN connection changed. Reload to continue with the current account.');
+            }
+            window.addEventListener('storage', changed);
+            return () => { espnRequestRef.current++; window.removeEventListener('storage', changed); };
+        }, []);
+
+        function chooseEspnTeam(league, teamId) {
+            try {
+                const selected = window.App.EspnHub.chooseTeam(league, teamId);
+                setEspnLeagues(prev => prev.map(l => l.id === selected.id ? selected : l));
+                setEspnChoiceLeague(null); setEspnError(null);
+                const route = parseHash(window.location.hash);
+                handleSelectLeague(selected, String(route.leagueId) === selected.id ? route.tab : null);
+            } catch (e) { setEspnError(e.message); }
+        }
 
         // Build the hub league object from a mapped MFL result. Shared by the
         // connect flow (finalizeMFLConnect) and the on-load rehydrator
@@ -1239,6 +1287,13 @@
                     const allLeagues = [...sleeperLeagues, ...visibleEspnLeagues, ...visibleMflLeagues];
                     const league = allLeagues.find(l => String(l.id) === String(nextState.leagueId));
                     if (league) {
+                        if (league._espn && (!window.App.EspnHub.isLeagueCurrent(league) || !league._espnTeamId)) {
+                            setSelectedLeague(null);
+                            if (window.App.EspnHub.isLeagueCurrent(league)) setEspnChoiceLeague(league);
+                            else setEspnError('Your ESPN connection changed. Reload before opening this league.');
+                            isNavigatingRef.current = false;
+                            return;
+                        }
                         setActiveLeagueId(league.id);
                         setSelectedLeague(league);
                         // Legacy 'brief' tab folded into dashboard
@@ -1273,10 +1328,12 @@
             if (!allLeagues.length) return;
             const league = allLeagues.find(l => String(l.id) === String(route.leagueId));
             if (!league) {
+                if (String(route.leagueId).startsWith('espn_')) return;
                 if (!loading) initialRouteAppliedRef.current = true;
                 return;
             }
             initialRouteAppliedRef.current = true;
+            if (league._espn && !league._espnTeamId) { setEspnChoiceLeague(league); return; }
             isNavigatingRef.current = true;
             setActiveLeagueId(league.id);
             setSelectedLeague(league);
@@ -1292,7 +1349,7 @@
                 routeUrl(buildHash(league.id, routeEntryTab))
             );
             setTimeout(() => { isNavigatingRef.current = false; }, 0);
-        }, [loading, sleeperLeagues, espnLeagues, mflLeagues]);
+        }, [loading, sleeperLeagues, espnLeagues, mflLeagues, espnConnecting]);
 
         // Show Empire Dashboard (Pro mode)
         // global-view.js is a deferred module group (see js/module-loader.js); load it
@@ -1473,6 +1530,7 @@
             return <>
                 <ErrorBoundary>
                     <LeagueDetail
+                        key={selectedLeague._espn ? selectedLeague.id + ':' + selectedLeague._espnTeamId : undefined}
                         league={selectedLeague}
                         onBack={() => {
                             setSelectedLeague(null);
@@ -1536,10 +1594,10 @@
         function leagueHealth(league) {
             const gp = league.wins + league.losses + (league.ties || 0);
             const wp = gp > 0 ? Math.round((league.wins / gp) * 100) : null;
-            const myRoster = league.rosters?.find(r => r.owner_id === sleeperUser?.user_id);
+            const myRoster = league._espn ? window.App.EspnHub.selectedRoster(league, league.rosters) : league.rosters?.find(r => r.owner_id === sleeperUser?.user_id);
             const rosterSlots = league.roster_positions?.filter(p => p !== 'BN' && p !== 'IR' && p !== 'TAXI').length || 0;
             const filled = myRoster?.starters?.filter(s => s && s !== '0').length || 0;
-            const fillPct = rosterSlots > 0 ? Math.round((filled / rosterSlots) * 100) : null;
+            const fillPct = rosterSlots > 0 && myRoster ? Math.round((filled / rosterSlots) * 100) : null;
             return { gp, wp, fillPct, teamCount: league.rosters?.length || 0 };
         }
 
@@ -1553,6 +1611,7 @@
         }
         function leagueTeamName(league) {
             try {
+                if (league._espn) return window.App.EspnHub.selectedRoster(league, league.rosters)?._team_name || league.name || '';
                 const me = league.rosters?.find(r => r.owner_id === sleeperUser?.user_id);
                 if (me) {
                     const u = league.users?.find(x => x.user_id === me.owner_id);
@@ -1761,7 +1820,8 @@
                             // feature-gated, not league-gated. No tiles lock.
                             const recordCol = h.wp === null ? 'var(--silver)' : h.wp >= 60 ? 'var(--win-green)' : h.wp < 40 ? 'var(--loss-red)' : 'var(--silver)';
                             return (
-                                <div key={l.id} onClick={() => onSelect(l)}
+                                <div key={l.id} onClick={() => onSelect(l)} role="button" tabIndex={0} aria-label={'Open ' + title}
+                                    onKeyDown={event => { if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); onSelect(l); } }}
                                     style={{ position: 'relative', cursor: 'pointer', background: 'var(--ov-1, rgba(255,255,255,0.02))', border: '1px solid ' + (isLast ? 'var(--gold)' : 'var(--acc-line1, rgba(212,175,55,0.18))'), borderRadius: '12px', padding: '14px', transition: 'all .14s' }}
                                     onMouseEnter={e => { e.currentTarget.style.borderColor = 'var(--gold)'; e.currentTarget.style.transform = 'translateY(-2px)'; }}
                                     onMouseLeave={e => { e.currentTarget.style.borderColor = isLast ? 'var(--gold)' : 'var(--acc-line1, rgba(212,175,55,0.18))'; e.currentTarget.style.transform = 'none'; }}>
@@ -1798,7 +1858,7 @@
                             Add a league
                         </div>
                     </div>
-                    {loading && <div style={{ padding: '10px', textAlign: 'center', color: 'var(--silver)', fontSize: 'var(--text-label, 0.75rem)', opacity: 0.6 }}>Loading more leagues…</div>}
+                    {hubSyncing && <div style={{ padding: '10px', textAlign: 'center', color: 'var(--silver)', fontSize: 'var(--text-label, 0.75rem)', opacity: 0.6 }}>Loading more leagues…</div>}
                 </div>
             );
         }
@@ -1812,10 +1872,14 @@
         // league-gated: Pro unlocks the smart tools inside every league, but
         // free users are never blocked from opening a league. (The old
         // one-free-league claim/lock machinery was removed here.)
-        function handleSelectLeague(league) {
+        function handleSelectLeague(league, requestedTab) {
+            if (league._espn) {
+                if (!window.App.EspnHub.isLeagueCurrent(league)) { setEspnError('Your account or ESPN connection changed. Reload before opening this league.'); return; }
+                if (!league._espnTeamId) { setEspnChoiceLeague(league); return; }
+            }
             setActiveLeagueId(league.id);
             setSelectedLeague(league);
-            const entryTab = defaultTabForLeague(league);
+            const entryTab = requestedTab || defaultTabForLeague(league);
             setActiveTab(entryTab);
             AppStorage.set(APP_WR_KEYS.LAST_LEAGUE_ID, league.id);
             AppStorage.set(APP_WR_KEYS.LAST_LEAGUE_NAME, league.name);
@@ -1844,38 +1908,11 @@
         async function handleESPNConnect(leagueId, espnS2, swid) {
             if (!platformAccessAllowed('espn')) { setEspnError(platformBetaMessage('espn')); return; }
             if (!leagueId) { setEspnError('Enter your ESPN league ID'); return; }
-            const numericId = leagueId.replace(/\D/g, '');
-            if (!numericId) { setEspnError('League ID must be a number from your ESPN URL'); return; }
+            const numericId = String(leagueId).trim();
+            if (!/^[1-9]\d*$/.test(numericId)) { setEspnError('League ID must be the exact number from your ESPN URL'); return; }
             if (!window.ESPN) { setEspnError('ESPN connector not loaded — refresh and try again'); return; }
-            setEspnConnecting(true);
-            setEspnError(null);
-            try {
-                const year = parseInt(selectedYear);
-                // Persist credentials for Scout deep-link
-                if (espnS2) { sessionStorage.setItem('espn_s2', espnS2); localStorage.removeItem('espn_s2'); }
-                if (swid)   { sessionStorage.setItem('espn_swid', swid); localStorage.removeItem('espn_swid'); }
-                const result = await window.ESPN.connectLeague(numericId, year, espnS2 || null, swid || null);
-                const league = {
-                    id:              result.league.league_id,
-                    name:            result.league.name,
-                    season:          String(year),
-                    wins:            0, losses: 0, ties: 0,
-                    rosters:         result.rosters,
-                    scoring_settings: result.league.scoring_settings,
-                    roster_positions: result.league.roster_positions,
-                    settings:         result.league.settings || {},
-                    _espn:            true,
-                    _espnLeagueId:    numericId,
-                };
-                setEspnLeagues(prev => {
-                    const filtered = prev.filter(l => l._espnLeagueId !== numericId);
-                    return [...filtered, league];
-                });
-            } catch (e) {
-                setEspnError(e.message || 'ESPN connection failed');
-            } finally {
-                setEspnConnecting(false);
-            }
+            if (espnConnecting) return;
+            return loadEspnData({ leagueId: numericId, year: selectedYear, espnS2: espnS2 || '', swid: swid || '' });
         }
 
         async function handleMFLConnect(leagueId, year, apiKey) {
@@ -1973,7 +2010,7 @@
         // `loading` starts true and only resolves via loadSleeperData, which never
         // runs without a username — so treat the hub as syncing only when a Sleeper
         // fetch is actually in flight (a signed-out user goes straight to connect).
-        const hubSyncing = loading && !!sleeperUsername;
+        const hubSyncing = (loading && !!sleeperUsername) || espnConnecting;
         const hubCtrlStyle = { fontFamily: 'var(--font-mono)', fontSize: '0.68rem', fontWeight: 600, letterSpacing: '.12em', color: 'var(--silver)', background: 'transparent', border: '1px solid var(--ov-6, rgba(255,255,255,0.1))', borderRadius: '4px', padding: '7px 11px', cursor: 'pointer', textDecoration: 'none', display: 'inline-flex', alignItems: 'center', lineHeight: 1 };
 
         return (
@@ -2090,6 +2127,30 @@
                     />
                 )}
                 {sleeperUsername && <ChampionshipBanners titles={ownerTitles} />}
+
+                {(espnConnecting || espnError || espnChoiceLeague || visibleEspnLeagues.length > 0) && (
+                    <section className="hub-franchise-picker" aria-label="ESPN connection" style={{ margin: '12px', padding: '14px', border: '1px solid var(--acc-line1)', borderRadius: '12px' }}>
+                        <strong>ESPN {espnChoiceLeague?.season || visibleEspnLeagues[0]?.season || ''}</strong>
+                        {espnConnecting && <p role="status">Loading your league and teams…</p>}
+                        {espnError && <p role="alert" style={{ color: 'var(--danger, #f87171)', margin: '10px 0', lineHeight: 1.5 }}>{espnError}{visibleEspnLeagues.length > 0 ? ' Previously loaded league details are still shown.' : ''}</p>}
+                        {espnChoiceLeague && <div>
+                            <p style={{ margin: '10px 0', lineHeight: 1.5 }}>Choose your team in {espnChoiceLeague.name}. This sets your dashboard view; it does not change league membership.</p>
+                            <div style={{ display: 'flex', flexWrap: 'wrap', gap: '8px' }}>{espnChoiceLeague.rosters.map(roster => (
+                                <button className="hub-cta gold" key={roster.roster_id} style={{ minHeight: '44px', whiteSpace: 'normal' }} onClick={() => chooseEspnTeam(espnChoiceLeague, roster.roster_id)}>{roster._team_name || roster._owner_name || 'Team ' + roster.roster_id}</button>
+                            ))}</div>
+                        </div>}
+                        {!espnConnecting && <div style={{ display: 'flex', flexWrap: 'wrap', gap: '8px', marginTop: '10px' }}>
+                            <button className="hub-cta ghost" onClick={() => loadEspnData()}>{espnError ? 'Retry ESPN' : 'Refresh ESPN'}</button>
+                            {visibleEspnLeagues[0]?._espnTeamId && <button className="hub-cta ghost" onClick={() => setEspnChoiceLeague(visibleEspnLeagues[0])}>Change team</button>}
+                        </div>}
+                        {espnError && <details style={{ marginTop: '10px' }}><summary>Private league access</summary>
+                            <p style={{ margin: '10px 0', lineHeight: 1.5 }}>If ESPN needs new cookies, add both values. They stay in this browser session.</p>
+                            <input aria-label="ESPN espn_s2 cookie" type="password" autoComplete="off" value={espnS2Input} onChange={e => setEspnS2Input(e.target.value)} style={{ width: '100%', minHeight: '44px', fontSize: '16px', marginBottom: '8px' }} />
+                            <input aria-label="ESPN SWID cookie" type="password" autoComplete="off" value={espnSwidInput} onChange={e => setEspnSwidInput(e.target.value)} style={{ width: '100%', minHeight: '44px', fontSize: '16px', marginBottom: '8px' }} />
+                            <button className="hub-cta gold" disabled={espnConnecting} onClick={() => { try { loadEspnData({ ...window.App.EspnHub.readSaved(), espnS2: espnS2Input, swid: espnSwidInput }); } catch (e) { setEspnError(e.message); } }}>Retry private league</button>
+                        </details>}
+                    </section>
+                )}
 
                 {/* ── Franchise picker — the default landing for every visitor.
                      Shows once we're past the initial no-cache sync, and stays

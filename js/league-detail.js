@@ -1861,7 +1861,9 @@
         async function loadLeagueDetails() {
             // New full load supersedes any in-flight background revalidation.
             const loadSeq = ++loadSeqRef.current;
+            const espnCurrent = () => !currentLeague._espn || window.App.EspnHub?.isLeagueCurrent(currentLeague);
             try {
+                if (!espnCurrent()) throw new Error('Your ESPN account or connection changed. Return to the hub and reload.');
                 // Clear assessment caches for THIS league so health scores compute fresh.
                 // Key by league ID — switching back to a previously-loaded league can
                 // reuse its cache if the underlying data hasn't changed.
@@ -1879,10 +1881,13 @@
                     throw new Error('League missing roster or user data');
                 }
 
-                const myRosterData = currentLeague._mfl && currentLeague._mflFranchiseId
+                const myRosterData = currentLeague._espn
+                    ? window.App.EspnHub.selectedRoster(currentLeague, currentLeague.rosters)
+                    : currentLeague._mfl && currentLeague._mflFranchiseId
                     ? currentLeague.rosters.find(r => r.roster_id === currentLeague._mflFranchiseId)
                     : currentLeague.rosters.find(r => r.owner_id === sleeperUserId);
                 setMyRoster(myRosterData);
+                if (currentLeague._espn && myRosterData) setViewingOwnerId(myRosterData.owner_id);
 
                 // Compute standings immediately (no fetch needed)
                 const standingsData = currentLeague.rosters.map(roster => {
@@ -1933,6 +1938,7 @@
                     fetchAllPlayers().catch(() => ({})),
                     fetchJSON(`${SLEEPER_BASE_URL}/state/nfl`).catch(() => ({})),
                 ]);
+                if (loadSeq !== loadSeqRef.current || !espnCurrent()) return;
                 // Fantasy week, not the raw NFL clock: preseason state counts
                 // EXHIBITION weeks (season_type 'pre', week 2 in mid-August) and
                 // painted "Week 2" across Game Day while every league was
@@ -1951,6 +1957,8 @@
                     nflState,
                 });
 
+                if (loadSeq !== loadSeqRef.current || !espnCurrent()) return;
+
                 applyHydrated(hydrated, { provider, sleeperPlayers, nflState, currentWeek, myRosterData, background: false });
 
                 // Register the background revalidator (audit:refresh-stale step 4).
@@ -1964,11 +1972,12 @@
                 if (window.WR?.Sync?.registerRevalidator) {
                     const bgLeagueId = currentLeague.id || currentLeague.league_id;
                     window.WR.Sync.registerRevalidator(async () => {
-                        if (loadSeq !== loadSeqRef.current) return;
+                        if (loadSeq !== loadSeqRef.current || !espnCurrent()) return;
                         const [bgPlayers, bgStateRaw] = await Promise.all([
                             fetchAllPlayers().catch(() => sleeperPlayers),                 // memoized player DB
                             fetchJSON(`${SLEEPER_BASE_URL}/state/nfl`).catch(() => ({})),  // always fresh — week-rollover source
                         ]);
+                        if (loadSeq !== loadSeqRef.current || !espnCurrent()) return;
                         const bgNfl = (bgStateRaw && Object.keys(bgStateRaw).length) ? bgStateRaw : (window.S?.nflState || nflState);
                         const bgWeek = (bgNfl && window.App?.WeeklyProj?.fantasyWeek)
                             ? window.App.WeeklyProj.fantasyWeek(bgNfl, currentLeague.settings)
@@ -1980,7 +1989,7 @@
                             prevSeason: STATS_YEAR,
                             nflState: bgNfl,
                         });
-                        if (loadSeq !== loadSeqRef.current) return;
+                        if (loadSeq !== loadSeqRef.current || !espnCurrent()) return;
                         if (window.S?.currentLeagueId && String(window.S.currentLeagueId) !== String(bgLeagueId)) return;
                         // Integrity gate (background only): hydrate's inner fetches
                         // degrade to {}/[] on failure, so a network blip could
@@ -2007,6 +2016,7 @@
                 setLoadStage('');
                 // Yield to the browser so the render commits before DHQ blocks
                 await new Promise(r => setTimeout(r, 0));
+                if (loadSeq !== loadSeqRef.current || !espnCurrent()) return;
 
                 if (typeof window.App?.loadLeagueIntel === 'function' && !window.App.LI_LOADED) {
                     setDhqStatus({ loading: true, step: 'Analyzing league history...', progress: 20 });
@@ -2084,6 +2094,7 @@
         // their own 8h/manual cadence. Errors propagate to the caller
         // (loadLeagueDetails' catch sets the error UI; WR.Sync logs).
         function applyHydrated(hydrated, { provider, sleeperPlayers, nflState, currentWeek, myRosterData, background = false }) {
+            if (currentLeague._espn && !window.App.EspnHub?.isLeagueCurrent(currentLeague)) return;
             // Pull enrichment out of _extras (Sleeper only — others empty)
             const stats       = hydrated._extras?.stats       || {};
             const projections = hydrated._extras?.projections || {};
@@ -2104,19 +2115,19 @@
             const tradedPicks = hydrated.tradedPicks || [];
             const matchupsData = hydrated.matchups || [];
 
-            // Patch currentLeague in place so downstream useEffects
-            // (computeRankings etc.) see the resolved rosters. React
-            // won't re-render from this mutation, but setStatsData /
-            // setSeasonCtxData below trigger re-renders anyway.
-            currentLeague.rosters = rosters;
-            if (leagueUsers.length) currentLeague.users = leagueUsers;
-
             // Re-resolve myRosterData now that rosters may have changed
-            const freshMyRoster = provider.id === 'mfl' && currentLeague._mflFranchiseId
+            const freshMyRoster = provider.id === 'espn'
+                ? window.App.EspnHub.selectedRoster(currentLeague, rosters)
+                : provider.id === 'mfl' && currentLeague._mflFranchiseId
                 ? rosters.find(r => r.roster_id === currentLeague._mflFranchiseId)
                 : rosters.find(r => r.owner_id === sleeperUserId) || myRosterData;
             if (freshMyRoster && freshMyRoster !== myRosterData) setMyRoster(freshMyRoster);
             const myRoster = freshMyRoster || myRosterData;
+            if (provider.id === 'espn' && !freshMyRoster) throw new Error('Your selected ESPN team is unavailable. Return to the hub to choose a current team.');
+
+            // Publish only after the chosen team's presence is established.
+            currentLeague.rosters = rosters;
+            if (leagueUsers.length) currentLeague.users = leagueUsers;
 
             setStatsData(stats);
             setProjectionsData(projections);
