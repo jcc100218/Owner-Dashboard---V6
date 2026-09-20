@@ -15,7 +15,7 @@ Sleeper identity requires a valid provider ID and username; MFL/ESPN league and 
 - Eighteen actual production-script groups and four touch-emulated Chrome configurations pass at320×740,390×844,844×390, and390×430. Evidence: evidence/public-connect-combined-sep20.log. Tests cover the actual twenty-second timeout, failure/retry, duplicate Enter, expired/owner-mismatched sessions, stale account and legacy writes, storage rollback, failed sign-out retry, concurrent providers, exact IDs, private proxy request/session-only secrets, reachable current action, stored choices and reopening.
 - Browser requests use isolated provider responses and a controlled destination page. External analytics and unrelated writes are blocked. The page scripts and real touch/scroll interactions execute in Chrome; provider fixtures and the destination fixture do not prove a completed live league journey or real private ESPN cookie exchange.
 - The existing public npm test suite and preview build pass using actual shared dedbb161. Final candidate build and independent follow-up disposition are recorded separately; no C2 shared engine was substituted.
-- Original independent review found provider sign-out and unhealthy-session gaps. Both were fixed with exact regression coverage before freeze. Final independent clearance remains pending at this report checkpoint.
+- Original independent review found provider sign-out and unhealthy-session gaps. Both were fixed with exact regression coverage before freeze. Final independent review cleared3d2826e and independently reran all18actual-script groups plus allfourphonebrowserjourneys; see public-session-connection-independent-review.md.
 
 ## Remaining work and release boundary
 
