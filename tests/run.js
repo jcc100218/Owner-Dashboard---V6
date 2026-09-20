@@ -761,7 +761,12 @@ function empireFixture(overrides) {
     ],
     liLoaded: true,
   };
-  return Object.assign({}, base, overrides || {});
+  const result = Object.assign({}, base, overrides || {});
+  // This pure-model fixture supplies explicit per-league contexts; the actual
+  // coordinator/account/engine contract is exercised in public-empire-engine.
+  const contexts = new Map(result.allLeagues.map(l => [l, result.scores]));
+  ctx.App.PublicEmpire = { valuesFor: l => contexts.get(l) || {}, assessmentsFor: () => [] };
+  return result;
 }
 
 test('counts multi-league exposure by player',
@@ -811,7 +816,7 @@ test('does not invent draft capital from an absent verified rights inventory',
     // the actual reviewed adapter in public-empire.cjs/browser.cjs.
   });
 
-test('marks DHQ as degraded when LI loaded but owned assets are unvalued',
+test('marks DHQ as degraded when no owned league context values assets',
   () => {
     const m = buildEmpirePortfolioModel(empireFixture({ scores: {} }));
     const dhq = m.dataQuality.items.find(i => i.key === 'dhq');

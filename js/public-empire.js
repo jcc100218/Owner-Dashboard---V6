@@ -9,6 +9,18 @@
             : league?._yahoo || idOf(league).startsWith('yahoo_') ? 'yahoo' : /^\d+$/.test(idOf(league)) ? 'sleeper' : 'unknown';
     const unavailable = reason => ({ status: 'unavailable', reason });
     const object = value => value && typeof value === 'object' && !Array.isArray(value);
+    const valueContexts = new WeakMap(), emptyValues = Object.freeze({});
+    const engineLeague = league => ({ ...Object.fromEntries(['name', 'season', 'status', 'type', 'league_type', '_dhq_type_override', 'metadata', 'scoring_settings', 'roster_positions', 'settings', 'total_rosters', 'previous_league_id', 'draft_id', 'drafts'].map(key => [key, league[key]])), league_id: idOf(league) });
+    const valueKey = league => JSON.stringify([providerOf(league), engineLeague(league), league.rosters, league.tradedPicks]);
+    function contextFor(league) {
+        const context = valueContexts.get(league);
+        if (!context) return null;
+        try { if (context.active && context.current() && context.key === valueKey(league)) return context; } catch (_) { /* fail closed */ }
+        context.active = false; return null;
+    }
+    const valuesFor = league => contextFor(league)?.scores || emptyValues;
+    const assessmentsFor = league => contextFor(league)?.assessments || [];
+
     function normalizeStats(raw, scoring, historical) {
         if (!object(raw) || !object(scoring) || !Object.keys(scoring).length || typeof App.calcRawPts !== 'function') return {};
         const out = {};
@@ -38,7 +50,7 @@
         let players = options.players || {};
         const leagues = options.leagues.map(league => ({ ...league, rosters: (league.rosters || []).map(r => ({ ...r, players: Array.isArray(r.players) ? r.players.slice() : r.players })),
             empireAssessments: [], empireDna: {}, empirePickState: null,
-            empireEvidence: { picks: { status: 'loading' }, stats: { status: 'loading' }, dna: { status: 'loading' }, assessments: { status: 'loading' } } }));
+            empireEvidence: { values: { status: 'loading' }, picks: { status: 'loading' }, stats: { status: 'loading' }, dna: { status: 'loading' }, assessments: { status: 'loading' } } }));
         const publish = () => { check(); const result = { players, leagues: leagues.slice(), status: { ...status } }; options.onProgress?.(result); return result; };
         publish();
         try {
@@ -48,6 +60,11 @@
         } catch (error) { check(); players = {}; status.players = unavailable(error.message); }
         publish();
         const rawStats = new Map();
+        let nflStateRequest;
+        const nflStateFor = () => nflStateRequest || (nflStateRequest = read('https://api.sleeper.app/v1/state/nfl').then(state => {
+            if (!object(state) || !/^\d{4}$/.test(String(state.season)) || !['pre', 'regular', 'post', 'off'].includes(state.season_type)) throw new Error('The current NFL season context is unavailable.');
+            return state;
+        }));
         const statsFor = season => {
             if (!rawStats.has(season)) rawStats.set(season, run(() => {
                 if (typeof window.fetchSeasonStats !== 'function') throw new Error('Season statistics are unavailable.');
@@ -89,17 +106,50 @@
                 }
             } catch (error) { check(); evidence.stats = unavailable(error.message); }
             check();
-            // Do not feed missing rights, seasonal dynasty assumptions, raw stat
-            // fields or an absent value engine into a confident health/tier read.
+            // Named capabilities prevent a mixed/older shared bundle from
+            // interpreting these arguments as the old active-global build.
             if (rostersKnown && !league._portfolioStale && evidence.picks.status === 'ready' && pickState?.coverage.format === 'dynasty'
-                && source === 'sleeper' && Object.keys(stats).length && App.LI_LOADED && Object.keys(App.LI?.playerScores || {}).length && typeof App.assessAllTeams === 'function') {
+                && source === 'sleeper' && status.players.status === 'ready' && Object.keys(stats).length) {
                 try {
-                    const result = App.assessAllTeams(league.rosters, players, stats, { ...league, drafts: picksRaw.league.drafts }, league.users || [], picksRaw.tradedPicks);
-                    check(); if (!Array.isArray(result) || result.length !== league.rosters.length) throw new Error('Team assessments are incomplete.');
-                    league.empireAssessments = result;
-                    evidence.assessments = { status: 'ready', stats: { ...evidence.stats }, valueBasis: 'loaded-league-proxy' };
-                } catch (error) { check(); evidence.assessments = unavailable(error.message); }
-            } else evidence.assessments = unavailable('Team reads need verified dynasty rights, roster holdings, scored season data and the value engine.');
+                    if (typeof App.loadLeagueIntelContext !== 'function' || typeof App.assessAllTeamsWithContext !== 'function') throw new Error('The league-context value engine has not loaded. Reload and retry Empire sync.');
+                    const nflState = await nflStateFor(); check();
+                    // The canonical engine's historical in-season interpretation
+                    // still needs its own validation. Do not label it current.
+                    if (String(nflState.season) !== String(league.season)) throw new Error('Historical league value context is not yet verified. Current holdings remain available.');
+                    const selected = { ...engineLeague(league), drafts: picksRaw.league.drafts };
+                    const state = { currentLeagueId: idOf(league), season: String(league.season), platform: source,
+                        leagues: [selected], rosters: league.rosters, players, drafts: selected.drafts,
+                        tradedPicks: picksRaw.tradedPicks, nflState, depthCharts: {} };
+                    let engineCurrent = true;
+                    const current = () => engineCurrent && active();
+                    let result;
+                    try { result = await run(() => App.loadLeagueIntelContext({ state, isCurrent: current, timeoutMs: options.timeoutMs || 20000 })); }
+                    catch (error) { engineCurrent = false; throw error; }
+                    check();
+                    if (String(result?.leagueId) !== idOf(league) || String(result?.season) !== String(league.season)
+                        || !object(result?.data?.playerScores) || !Object.keys(result.data.playerScores).length
+                        || Object.values(result.data.playerScores).some(value => !Number.isFinite(value) || value < 0)) throw new Error('The value engine did not confirm this league and season.');
+                    const scores = Object.freeze({ ...result.data.playerScores });
+                    const context = { active: true, current, key: valueKey(league), scores, assessments: [] };
+                    valueContexts.set(league, context);
+                    evidence.values = { status: 'ready', leagueId: idOf(league), season: String(league.season), basis: 'league-context', inputCoverage: 'unverified' };
+                    // Source/ledger completeness is a separate engine gate. These
+                    // are calculated reads, not proof that every feed is current.
+                    const assessments = App.assessAllTeamsWithContext(league.rosters, players, stats, selected, league.users || [], picksRaw.tradedPicks,
+                        { leagueId: idOf(league), season: String(league.season), playerScores: scores, isCurrent: current });
+                    check();
+                    if (!Array.isArray(assessments) || assessments.length !== league.rosters.length) throw new Error('Team assessments are incomplete.');
+                    context.assessments = assessments;
+                    league.empireAssessments = assessments;
+                    evidence.assessments = { status: 'ready', stats: { ...evidence.stats }, valueBasis: 'league-context', inputCoverage: 'unverified' };
+                } catch (error) { check();
+                    if (!valueContexts.has(league)) evidence.values = unavailable(error.message);
+                    evidence.assessments = unavailable(error.message);
+                }
+            } else {
+                evidence.values = unavailable('League values need verified current dynasty rights, roster holdings and scored season data.');
+                evidence.assessments = unavailable('Team reads need verified dynasty rights, roster holdings, scored season data and the league-context value engine.');
+            }
             publish();
             // Read the current principal's saved cloud DNA directly. The legacy
             // OD.loadDNA reader writes unscoped local cache after its await.
@@ -139,5 +189,5 @@
         }
         status.status = 'ready'; return publish();
     }
-    App.PublicEmpire = { load, normalizeStats, providerOf };
+    App.PublicEmpire = { load, normalizeStats, providerOf, valuesFor, assessmentsFor };
 })();
