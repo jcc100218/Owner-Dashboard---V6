@@ -1,6 +1,6 @@
 'use strict';
 const assert=require('node:assert/strict'),fs=require('node:fs'),path=require('node:path'),{spawn}=require('node:child_process'),{chromium}=require('@playwright/test');
-(async()=>{let server,browser;try{
+(async()=>{let server,browser;const pendingFixtureReplies=new Set();try{
 const origin=await new Promise((resolve,reject)=>{server=spawn(process.execPath,['scripts/serve-static.cjs','--host=127.0.0.1','--port=0'],{cwd:path.resolve(__dirname,'..'),stdio:['ignore','pipe','pipe']});const timeout=setTimeout(()=>reject(Error('Preview failed to start')),10000);server.stdout.on('data',data=>{const match=String(data).match(/http:\/\/127\.0\.0\.1:\d+/);if(match){clearTimeout(timeout);resolve(match[0]);}});server.once('error',reject);});
 browser=await chromium.launch({headless:true,executablePath:process.env.PLAYWRIGHT_CHROME_PATH||'/Applications/Google Chrome.app/Contents/MacOS/Google Chrome'});
 for(const viewport of [{width:320,height:740},{width:390,height:844},{width:844,height:390},{width:390,height:430}]){
@@ -13,7 +13,7 @@ await context.route('**/*',async route=>{const req=route.request(),url=new URL(r
 if(url.pathname==='/index.html'&&url.origin===origin)return route.fulfill({contentType:'text/html',body:'<p>Controlled destination fixture</p>'});
 if(url.origin===origin)return route.continue();
 if(req.method()==='OPTIONS')return route.fulfill({status:204,headers:{'Access-Control-Allow-Origin':'*','Access-Control-Allow-Headers':'*','Access-Control-Allow-Methods':'POST,OPTIONS'}});
-if(url.hostname==='api.sleeper.app'){calls++;await new Promise(r=>release=r);return route.fulfill({status:response.status,headers:{'Access-Control-Allow-Origin':'*'},contentType:'application/json',body:JSON.stringify(response.body)}).catch(()=>{});}
+if(url.hostname==='api.sleeper.app'){calls++;await new Promise(resolve=>{const finish=()=>{pendingFixtureReplies.delete(finish);resolve();};release=finish;pendingFixtureReplies.add(finish);});return route.fulfill({status:response.status,headers:{'Access-Control-Allow-Origin':'*'},contentType:'application/json',body:JSON.stringify(response.body)}).catch(()=>{});}
 if(url.pathname.endsWith('/espn-proxy')){privateCalls++;return route.fulfill({status:200,headers:{'Access-Control-Allow-Origin':'*'},contentType:'application/json',body:JSON.stringify({settings:{name:'Controlled private ESPN'},teams:[{id:1}]})});}
 return route.abort();});
 const page=await context.newPage(),errors=[];page.on('pageerror',error=>errors.push(error.message));await page.goto(origin+'/connect-sleeper.html');
@@ -29,6 +29,6 @@ if(viewport.width===320||viewport.width===390&&viewport.height===844)await page.
 await page.locator('#tabEspn').tap();await page.getByRole('textbox',{name:'ESPN league ID',exact:true}).fill('56789');await page.locator('#espnYear').fill('2026');await page.getByRole('button',{name:/Private league/}).tap();await page.locator('#espnS2').fill('controlled-s2');await page.locator('#espnSwid').fill('controlled-swid');await page.locator('#btnEspn').tap();await page.locator('#btnEspn').filter({hasText:'connected'}).waitFor();assert.equal(privateCalls,1);
 const saved=await page.evaluate(()=>({auth:JSON.parse(localStorage.getItem('od_auth_v1')),espn:localStorage.getItem('espn_league_id'),secret:localStorage.getItem('espn_s2'),transient:sessionStorage.getItem('espn_s2')}));assert.equal(saved.auth.sleeperUserId,'123456789012345678');assert.equal(saved.espn,'56789');assert.equal(saved.secret,null);assert.equal(saved.transient,'controlled-s2');
 await page.locator('#enterBtn').tap();await page.waitForURL('**/index.html');assert.deepEqual(await page.evaluate(()=>JSON.parse(localStorage.getItem('od_profile_v1')).platforms),['sleeper','espn']);await page.goto(origin+'/connect-sleeper.html');await page.waitForURL('**/index.html');assert.equal(errors.length,0,errors.join('\n'));
-console.log(JSON.stringify({viewport,checks:['reachable labeled controls','no overflow','failed provider retry preserves input','duplicate Enter guarded','real timeout on320','stale A response preserves B','private ESPN fixture uses proxy and session-only cookies','completed connection remains current','save and reopen preserve provider choices'],evidence:'local actual page with isolated provider fixtures and destination fixture'}));await context.close();
+console.log(JSON.stringify({viewport,checks:['reachable labeled controls','no overflow','failed provider retry preserves input','duplicate Enter guarded','real timeout on320','stale A response preserves B','private ESPN fixture uses proxy and session-only cookies','completed connection remains current','save and reopen preserve provider choices'],evidence:'local actual page with isolated provider fixtures and destination fixture'}));for(const finish of pendingFixtureReplies)finish();await context.close();
 }
-}finally{if(browser)await browser.close();if(server)server.kill('SIGTERM');}})().catch(error=>{console.error(error.stack);process.exitCode=1;});
+}finally{for(const finish of pendingFixtureReplies)finish();if(browser)await browser.close();if(server)server.kill('SIGTERM');}})().catch(error=>{console.error(error.stack);process.exitCode=1;});
