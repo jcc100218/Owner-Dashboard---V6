@@ -1073,10 +1073,35 @@
             mflPendingRef.current = null;
             setMflConnecting(false); setMflFranchises(null); setMflPendingResult(null);
         }
+        function mflLeagueCurrent(league) {
+            if (!league?._mfl) return true;
+            try {
+                if (!mflPageRef.current?.isCurrent()) return false;
+                const creds=league._platformCreds, saved=window.MFL.provider.loadCredentials(league.id);
+                return window.MFL.provider.isConnectionCurrent(creds) && !!saved
+                    && saved._mflOwner===creds._mflOwner
+                    && String(saved.leagueId)===String(league._mflLeagueId)
+                    && String(saved.year)===String(league.season)
+                    && String(creds.leagueId)===String(saved.leagueId) && String(creds.year)===String(saved.year)
+                    && !!league._mflFranchiseId && String(saved.franchiseId)===String(league._mflFranchiseId)
+                    && String(creds.franchiseId)===String(saved.franchiseId)
+                    && (creds.apiKey||null)===(saved.apiKey||null);
+            } catch (_) { return false; }
+        }
+        function clearMFLSelection() {
+            setSelectedLeague(previous=>previous?._mfl?null:previous);
+            setActiveLeagueId(previous=>String(previous||'').startsWith('mfl_')?null:previous);
+        }
+        function guardMFLLeagueEntry(league) {
+            if (mflLeagueCurrent(league)) return true;
+            clearMFLSelection();cancelMFLConnect();setMflLeagues([]);setMflSaveStatus(null);
+            setMflError('Your MFL account or selected team changed. Reload or reconnect before opening this league.');
+            return false;
+        }
         function reportMFLFailure(request, error) {
             if (request && mflRequestRef.current !== request) return;
             if (mflPageRef.current && !mflPageRef.current.isCurrent()) {
-                setMflLeagues([]);mflPendingRef.current=null;setMflFranchises(null);setMflPendingResult(null);setMflSaveStatus(null);
+                clearMFLSelection();setMflLeagues([]);mflPendingRef.current=null;setMflFranchises(null);setMflPendingResult(null);setMflSaveStatus(null);
             }
             setMflError(error.message || 'MFL could not load. Reconnect below.');
         }
@@ -1144,7 +1169,7 @@
             })();
             const changed = () => {
                 if (mflPageRef.current?.isCurrent()) return;
-                cancelMFLConnect(); setMflLeagues([]); setMflError('Your account changed. Reload to connect the current account.');
+                cancelMFLConnect(); clearMFLSelection();setMflLeagues([]); setMflError('Your account changed. Reload to connect the current account.');
             };
             window.addEventListener('storage',changed);
             return () => { mflRequestRef.current=null; mflPendingRef.current=null; window.removeEventListener('storage',changed); };
@@ -1280,6 +1305,7 @@
                     const allLeagues = [...sleeperLeagues, ...visibleEspnLeagues, ...visibleMflLeagues];
                     const league = allLeagues.find(l => String(l.id) === String(nextState.leagueId));
                     if (league) {
+                        if (!guardMFLLeagueEntry(league)) { isNavigatingRef.current=false;return; }
                         if (league._espn && (!window.App.EspnHub.isLeagueCurrent(league) || !league._espnTeamId)) {
                             setSelectedLeague(null);
                             if (window.App.EspnHub.isLeagueCurrent(league)) setEspnChoiceLeague(league);
@@ -1327,6 +1353,7 @@
                 return;
             }
             initialRouteAppliedRef.current = true;
+            if (!guardMFLLeagueEntry(league)) return;
             if (league._espn && !league._espnTeamId) { setEspnChoiceLeague(league); return; }
             isNavigatingRef.current = true;
             setActiveLeagueId(league.id);
@@ -1448,6 +1475,10 @@
             );
         }
 
+        // A later render cannot keep an old account/team's room mounted.
+        if (selectedLeague?._mfl && !mflLeagueCurrent(selectedLeague)) {
+            guardMFLLeagueEntry(selectedLeague);return null;
+        }
         // Show league detail if selected
         const LeagueDetail = window.LeagueDetail;
         if (selectedLeague) {
@@ -1798,6 +1829,7 @@
         // free users are never blocked from opening a league. (The old
         // one-free-league claim/lock machinery was removed here.)
         function handleSelectLeague(league, requestedTab) {
+            if (!guardMFLLeagueEntry(league)) return;
             if (league._espn) {
                 if (!window.App.EspnHub.isLeagueCurrent(league)) { setEspnError('Your account or ESPN connection changed. Reload before opening this league.'); return; }
                 if (!league._espnTeamId) { setEspnChoiceLeague(league); return; }

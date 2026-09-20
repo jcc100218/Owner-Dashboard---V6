@@ -30,3 +30,11 @@ ESLint on the changed production `js/app.js` passes. Independent consumer review
 ## Remaining gates
 
 This is a bounded connection/ownership candidate, not full MFL readiness. Canonical range-based starter mapping and optional transaction/draft/pick failure truthfulness remain high-severity provider work. Separate public lineup/direct-draft caller changes require integration and review. Real signed legacy RLS read/save acknowledgment, real private MFL read/write/reopen, cross-device legacy reconciliation, full actual LeagueDetail behavior, deployed served bytes, physical-device and store claims are not established by these fixtures. No live writes were performed. Parent owns final shared union, consumer integration and release.
+
+## Independent entry review and correction
+
+Security_boundaries independently reran the first15 caller groups,18 onboarding groups and6 Chrome cases, then found an adjacent **high** account-entry gap in `f61603f`: a saved account-A card could still be passed to `handleSelectLeague` after same-document account B was installed. The initial route and popstate bypassed the provider-specific check too, and clearing cards on a storage event did not clear an already selected MFL room.
+
+The follow-up uses one MFL entry validator before all three publication paths. It requires the mounted page account and canonical saved ownership plus exact league, season, franchise and current volatile key to match the card. Failure clears selected MFL state and presents a reconnect/reload action. Observed account transitions clear selected MFL/active ID; a later render also refuses to mount a superseded MFL room. Other providers retain their existing handling.
+
+New actual-function regressions exercise each card/popstate/deep-link path with valid, switched-account, changed-team and changed-key inputs, plus open-room storage transition and render defense. All18 total caller groups pass; the3 added groups fail against exact `f61603f` source. All6 Chrome cases pass again, now including a valid saved deep link and removal of an open room on an observed account transition. The actual renderer still hands off to a LeagueDetail fixture; this is not complete MFL league-tools validation. ESLint and71-script preview compile pass on the correction. Independent spot review requested before parent release integration.
