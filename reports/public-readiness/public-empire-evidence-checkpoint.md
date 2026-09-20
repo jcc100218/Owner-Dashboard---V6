@@ -31,3 +31,13 @@ The consumer requires the already reviewed/integrated public Trade adapter batch
 4. Empty/non-ready values must stay visible as incomplete during integration. Root must merge current ESPN/app changes, retain pending deep links and all helpers, run the combined candidate against the intended shared union, complete independent review and then verify served revision/assets/journeys. No launch claim, live release, physical-device, native build or store claim is made by these fixture tests.
 
 Resume from this checkpoint; do not restart the hub audit. Next is independent consumer review, then the explicit-context canonical engine lane already assigned by root.
+
+## Independent root review and correction
+
+Root reproduced two pending trades incorrectly classifying an owner as ACCEPTOR through the actual inference function, and found unavailable rights displayed as zero picks inside League Portfolio. The correction only passes completed Sleeper transactions to behavioral inference, rejects malformed weekly rows as unavailable, and preserves completed-trade inference. Both pick metrics in the detail view now show unknown/unavailable until ownership is verified. This follows the [documented Sleeper transaction status](https://docs.sleeper.com/#get-transactions); pending offers are not completed transactions.
+
+The cloud DNA reader also now uses the canonical signed-owner resolver rather than choosing an arbitrary cached display username. A missing or mismatched owner cannot issue the cloud query. The independently reviewed shared session union supplies the existing resolver; its legacy-principal checks were separately covered in the full shared-module suite.
+
+Root reran17 actual-source groups,198 broad checks and the real Empire fixture at320/390/844 with new detail-view unknown assertions. All pass. Evidence: independent-status-before.log (actual original pending inference failure), independent-status-after.log, independent-broad.log, independent-build.log and independent-browser.log under evidence/public-empire/. The first new browser assertion expected title case while CSS renders uppercase; independent-browser-label-original.log preserves that harness failure. The corrected assertion targets the metric value directly and still requires Unknown. No product change was made for the CSS label.
+
+The bounded consumer changes are ready for combined integration. Global engine provenance/cold-start, seasonal assessment semantics and legacy local DNA migration remain explicit open lanes; these corrections do not make Empire launch-ready.

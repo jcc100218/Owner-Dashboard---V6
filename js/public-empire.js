@@ -106,12 +106,11 @@
             let saved = {}, transactions = [], savedReady = false, transactionReady = false;
             try {
                 check();
-                const token = window.OD?.getSessionToken?.(), account = window.OD?.getAppSession?.();
-                const username = window.getCurrentUsername?.();
-                const db = token && window.OD?.getClient?.();
-                if (!db || (!account?.user?.id && !username)) throw new Error('Saved owner notes require a current account connection.');
+                const token = window.OD?.getSessionToken?.(), owner = window.getOwnerIdentity?.();
+                const db = token && (owner?.userId || owner?.username) && window.OD?.getClient?.();
+                if (!db) throw new Error('Saved owner notes require a current account connection.');
                 let query = db.from('owner_dna').select('dna_map');
-                query = account?.user?.id ? query.eq('user_id', account.user.id) : query.eq('username', username);
+                query = owner.userId ? query.eq('user_id', owner.userId) : query.eq('username', owner.username);
                 const reply = await run(() => query.eq('league_id', idOf(league)).maybeSingle());
                 if (reply.error || (reply.data?.dna_map != null && !object(reply.data.dna_map))) throw new Error('Saved owner notes could not load.');
                 saved = reply.data?.dna_map || {}; savedReady = true;
@@ -122,8 +121,10 @@
                     // WrTxns' implicit active-season context and failure-to-[] cache.
                     for (let week = 0; week <= 18; week++) {
                         const rows = await read('https://api.sleeper.app/v1/league/' + idOf(league) + '/transactions/' + week);
-                        if (!Array.isArray(rows) || rows.some(row => row?.league_id && String(row.league_id) !== idOf(league))) throw new Error('League transaction evidence is incomplete.');
-                        transactions.push(...rows.filter(row => row && row.status !== 'failed'));
+                        if (!Array.isArray(rows) || rows.some(row => !object(row) || !['trade', 'waiver', 'free_agent'].includes(row.type)
+                            || typeof row.status !== 'string' || !row.status.trim()
+                            || (row.league_id && String(row.league_id) !== idOf(league)))) throw new Error('League transaction evidence is incomplete.');
+                        transactions.push(...rows.filter(row => row.status === 'complete'));
                     }
                     transactionReady = true;
                 } else if (league.transactionStatus?.status === 'ready' && String(league.transactionStatus.leagueId) === idOf(league) && String(league.transactionStatus.season) === String(league.season) && Array.isArray(league.transactions)) {

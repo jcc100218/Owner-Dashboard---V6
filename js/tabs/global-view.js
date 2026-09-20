@@ -477,7 +477,7 @@ function deriveOwnerEdge(posture) {
 // behavioral signal, otherwise leaves the owner unset (for curated DNA / NONE to fill).
 function inferDnaFromTransactions(transactions, rosters, myUserId) {
     const out = {};
-    const trades = (transactions || []).filter(t => t && t.type === 'trade' && t.status !== 'failed');
+    const trades = (transactions || []).filter(t => t && t.type === 'trade' && t.status === 'complete');
     if (trades.length < 2 || !rosters || !rosters.length) return out;
     const ridToOwner = {};
     rosters.forEach(r => { if (r && r.roster_id != null) ridToOwner[r.roster_id] = r.owner_id; });
@@ -1809,7 +1809,7 @@ function EmpireDashboard({ allLeagues, playersData, sleeperUserId, ownerName, po
                     <div className="empire-detail-metrics">
                         <div className="empire-metric"><span>Total DHQ</span><strong>{province.totalDHQ > 0 ? empireCompact(province.totalDHQ) : 'No DHQ'}</strong></div>
                         <div className="empire-metric"><span>Health</span><strong>{province.healthScore ?? 'No read'}</strong></div>
-                        <div className="empire-metric"><span>Pick Capital</span><strong>{province.pickCount} picks</strong></div>
+                        <div className="empire-metric"><span>Pick Capital</span><strong>{province.pickFeedPresent ? province.pickCount + ' picks' : 'Unknown'}</strong></div>
                         <div className="empire-metric"><span>Premium Picks</span><strong>{province.pickFeedPresent ? province.premiumPickCount : 'Unknown'}</strong></div>
                     </div>
                     <div className="empire-slice-grid">
@@ -1818,7 +1818,7 @@ function EmpireDashboard({ allLeagues, playersData, sleeperUserId, ownerName, po
                             <div className="empire-stack">
                                 <div className="empire-quality" style={{ '--tone': province.tierColor }}><span>Strengths</span><strong>{province.strengths.length ? province.strengths.join(', ') : 'None flagged'}</strong><em>Current roster edge</em></div>
                                 <div className="empire-quality" style={{ '--tone': 'var(--k-e74c3c, #e74c3c)' }}><span>Needs</span><strong>{province.needs.length ? province.needs.join(', ') : 'None flagged'}</strong><em>Upgrade lanes</em></div>
-                                <div className="empire-quality" style={{ '--tone': 'var(--purple)' }}><span>Draft Capital</span><strong>{leaguePicks.length} picks</strong><em>{leaguePicks.filter(p => p.acquired).length} acquired</em></div>
+                                <div className="empire-quality" style={{ '--tone': 'var(--purple)' }}><span>Draft Capital</span><strong>{province.pickFeedPresent ? leaguePicks.length + ' picks' : 'Holdings unavailable'}</strong><em>{province.pickFeedPresent ? leaguePicks.filter(p => p.acquired).length + ' acquired' : 'Retry Empire sync to confirm'}</em></div>
                             </div>
                         </section>
                         <section className="empire-workspace" style={{ marginTop: 0 }}>
