@@ -1052,6 +1052,9 @@
         const [welcomeMode, setWelcomeMode] = useState(false); // centered modal for first-time welcome
         const [showCornerToast, setShowCornerToast] = useState(false); // "I'll be down here" toast
         const [transactions, setTransactions] = useState([]);
+        const [transactionStatus, setTransactionStatus] = useState(null);
+        const [transactionRetrying, setTransactionRetrying] = useState(false);
+        const transactionRetryRef = useRef(false);
         const [rankedTeams, setRankedTeams] = useState([]);
         const [dhqStatus, setDhqStatus] = useState({ loading: false, step: '', progress: 0 });
         const [loadStage, setLoadStage] = useState('');
@@ -1858,7 +1861,7 @@
             loadLeagueDetails();
         }, [currentLeague]);
 
-        async function loadLeagueDetails() {
+        async function loadLeagueDetails(options = {}) {
             // New full load supersedes any in-flight background revalidation.
             const loadSeq = ++loadSeqRef.current;
             const espnCurrent = () => !currentLeague._espn || window.App.EspnHub?.isLeagueCurrent(currentLeague);
@@ -2008,8 +2011,14 @@
                             throw new Error('Background revalidation returned empty rosters/users — keeping current data');
                         }
                         applyHydrated(bgHydrated, { provider, sleeperPlayers: bgPlayers, nflState: bgNfl, currentWeek: bgWeek, myRosterData, background: true });
+                        if (provider.id === 'espn' && window.S?.transactionStatus?.status !== 'ready') {
+                            throw new Error('ESPN trade feed is incomplete — keeping its last confirmed data');
+                        }
                     });
                 }
+                // Feed recovery reuses provider/context guards and restores the
+                // background revalidator without starting AI/history/tag jobs.
+                if (options.transactionsOnly) { setLoadStage(''); return; }
 
                 // Paint the dashboard shell before DHQ starts, then await DHQ.
                 // This lets React commit the initial render (standings, rosters,
@@ -2084,6 +2093,17 @@
                 setError(err.message || 'Failed to load league details');
                 setLoading(false);
                 setLoadStage('');
+            }
+        }
+
+        async function retryTransactions() {
+            if (transactionRetryRef.current || !window.App.EspnHub?.isLeagueCurrent(currentLeague)) return;
+            transactionRetryRef.current = true;
+            setTransactionRetrying(true);
+            try { await loadLeagueDetails({ transactionsOnly: true }); }
+            finally {
+                transactionRetryRef.current = false;
+                if (window.App.EspnHub?.isLeagueCurrent(currentLeague)) setTransactionRetrying(false);
             }
         }
 
@@ -2352,21 +2372,25 @@
             // Flatten hydrated transactions (already bucketed by week
             // from the provider) and merge in DHQ historical trades.
             // This replaces the old per-platform transaction fetch.
+            const transactionFeed = window.App.TransactionFeed.resolve(hydrated, currentLeague, provider.id);
+            setTransactionStatus(transactionFeed.status);
             let allTxns = [];
-            Object.values(hydrated.transactions || {}).forEach(wk => {
+            Object.values(transactionFeed.transactions).forEach(wk => {
                 allTxns = allTxns.concat(wk || []);
             });
             // Order by EFFECTIVE time (when it took effect), not `created` (when a
             // waiver claim was first placed). A waiver claimed days ago but
             // processed last night must surface as last night's news, not sort
             // back to its claim date and get buried.
-            const txnEffectiveTs = t => (t.status_updated || t.created || 0);
+            const txnEffectiveTs = t => (t.status_updated || t.created || t.timestamp || 0);
             allTxns.sort((a, b) => txnEffectiveTs(b) - txnEffectiveTs(a));
 
             // Merge DHQ historical trades (pre-analyzed with value data)
             // Deduplicate by timestamp so the provider's recent txns
             // aren't doubled.
-            if (window.App?.LI?.tradeHistory?.length > 0) {
+            // Legacy LI has no league/account tag on its tradeHistory. It cannot
+            // certify an ESPN feed or fill an unavailable response for this view.
+            if (provider.id !== 'espn' && window.App?.LI?.tradeHistory?.length > 0) {
                 const existingTradeTs = new Set(allTxns.filter(t => t.type === 'trade').map(t => t.created || 0));
                 const histTrades = window.App.LI.tradeHistory
                     .filter(t => !existingTradeTs.has(t.ts || 0))
@@ -2384,6 +2408,7 @@
                     txnsByWeek[key].push(t);
                 });
                 window.S.transactions = txnsByWeek;
+                window.S.transactionStatus = transactionFeed.status;
             }
             let visibleTxns = allTxns.slice(0, 50);
             if (!visibleTxns.some(t => t.type === 'trade')) {
@@ -3914,6 +3939,7 @@
                 </div>}
 
                 {/* Debug panel (dev only) */}
+                {activeTab !== 'dashboard' && transactionStatus && transactionStatus.status !== 'ready' && <div style={{ padding: '0 16px' }}><window.WrTxnFeedStatus status={transactionStatus} onRetry={retryTransactions} retrying={transactionRetrying} /></div>}
                 {DEV_DEBUG && <div className="wr-debug-strip" style={{ padding: '4px 24px', background: 'rgba(255,0,0,0.04)', borderBottom: '1px solid rgba(255,0,0,0.1)', fontSize: 'var(--text-label, 0.75rem)', fontFamily: 'monospace', color: 'var(--k-f0a500, #f0a500)' }}>
                     <div style={{ display: 'flex', gap: '16px', marginBottom: '2px' }}>
                         <span>year={timeYear}</span>
@@ -4107,6 +4133,9 @@
                     sleeperUserId={sleeperUserId}
                     setActiveTab={setActiveTab}
                     transactions={transactions}
+                    transactionStatus={transactionStatus}
+                    retryTransactions={retryTransactions}
+                    transactionRetrying={transactionRetrying}
                     standings={standings}
                     currentLeague={currentLeague}
                     leagueSkin={leagueSkin}
