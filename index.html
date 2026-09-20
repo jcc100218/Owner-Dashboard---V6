@@ -108,12 +108,15 @@ if (_isLocalDev) {
     },
   };
 }
-// ═══ GRAFT PHASE 4 (owner-approved, 2026-09-05): the behavioral-model
-// engine is ON for this site. Sleeper leagues price through values-v2
-// and assess through the one brain; non-Sleeper leagues automatically
-// stay on the original engine (the switch is per-provider inside
-// dhq-engine.js). Rollback: set this to false — one line.
-window.__DHQ_ENGINE_V2 = true;
+// ═══ Value engine switch ═══
+// true  = the v2 points-over-waiver formula (values-v2.js), live 2026-09-05
+//         to 2026-09-20.
+// false = the original market-blended engine inside dhq-engine.js.
+// Owner ruling 2026-09-20: the original engine returns. It agreed with
+// the dynasty market at 0.92 against v2's 0.84, kept veteran IDP priced,
+// and did not put pick-slot rookies above Gibbs and Bijan. The one-brain
+// assessments (health, tiers, record-first power rank) run either way.
+window.__DHQ_ENGINE_V2 = false;
 const WR_SHARED_FILES = [
   'app-config.js',
   'bug-capture.js',
