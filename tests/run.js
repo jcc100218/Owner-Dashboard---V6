@@ -797,16 +797,18 @@ test('places assets into build, peak, and post-window buckets',
     eq(post.count, 1);
   });
 
-test('summarizes own, acquired, and premium draft capital',
+test('does not invent draft capital from an absent verified rights inventory',
   () => {
     const m = buildEmpirePortfolioModel(empireFixture());
     const alpha = m.provinces.find(p => p.id === 'l1');
     ok(alpha, 'expected Alpha league');
-    eq(alpha.pickCount, 12);
-    eq(alpha.ownPickCount, 11);
-    eq(alpha.acquiredPickCount, 1);
-    eq(alpha.premiumPickCount, 6);
-    eq(m.pickCapital.byYear.find(y => y.year === 2026).premium, 4);
+    eq(alpha.pickCount, 0);
+    eq(alpha.pickFeedPresent, false);
+    eq(m.pickCapital.complete, false);
+    eq(m.picks.length, 0);
+    ok(m.dataQuality.items.find(item => item.key === 'picks').detail.includes('no picks assumed'));
+    // Completed/current, transferred and seasonal rights are exercised through
+    // the actual reviewed adapter in public-empire.cjs/browser.cjs.
   });
 
 test('marks DHQ as degraded when LI loaded but owned assets are unvalued',

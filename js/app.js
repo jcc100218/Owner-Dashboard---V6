@@ -1299,112 +1299,32 @@
                 .catch(() => { if (alive) setEmpireModuleState('error'); });
             return () => { alive = false; };
         }, [proMode, _EmpireDash]);
-        const [empirePlayersLoaded, setEmpirePlayersLoaded] = useState(false);
         const [empirePlayers, setEmpirePlayers] = useState({});
-        // Bumped after background roster assessment so the Rolodex re-renders.
-        const [, setEmpireAssessReady] = useState(0);
-
-        // Load player database + DHQ engine when Pro mode activates
+        const [empireSnapshot, setEmpireSnapshot] = useState(null);
+        const [empireRetry, setEmpireRetry] = useState(0);
         useEffect(() => {
-            if (!proMode || empirePlayersLoaded) return;
+            if (!proMode || selectedLeague) return;
+            let alive = true;
+            const current = () => alive && portfolioApi.current(portfolioAccount.current);
+            setEmpireSnapshot(null);
             (async () => {
                 try {
-                    // The deferred empire group owns buildEmpireDna & co. — make sure it
-                    // has executed before the assessment loop below reaches for it.
-                    if (window.wrLoadModuleGroup) { try { await window.wrLoadModuleGroup('empire'); } catch (e) {} }
-                    // Load 10k player database (league-independent, cached 1hr)
-                    const players = await window.App.fetchAllPlayers();
-                    setEmpirePlayers(players || {});
-                    // Ensure window.S exists for assessment functions
-                    if (!window.S) window.S = {};
-                    window.S.players = players;
-                    // Populate rosters from all leagues into window.S for assessments
-                    const allRosters = [];
-                    const allUsers = [];
-                    const allLeaguesList = [...sleeperLeagues, ...visibleEspnLeagues, ...visibleMflLeagues];
-                    allLeaguesList.forEach(l => {
-                        (l.rosters || []).forEach(r => { if (!allRosters.find(x => x.roster_id === r.roster_id)) allRosters.push(r); });
-                        (l.users || []).forEach(u => { if (!allUsers.find(x => x.user_id === u.user_id)) allUsers.push(u); });
+                    // The reviewed Trade adapter owns provider and draft evidence.
+                    if (window.wrLoadModuleGroup) await Promise.all([window.wrLoadModuleGroup('empire'), window.wrLoadModuleGroup('trade')]);
+                    if (!current()) { if (alive) clearChangedPortfolio(); return; }
+                    await window.App.PublicEmpire.load({
+                        identity: portfolioAccount.current, isCurrent: current,
+                        leagues: [...sleeperLeagues, ...visibleEspnLeagues, ...visibleMflLeagues],
+                        players: empirePlayers, sleeperUserId: sleeperUser?.user_id,
+                        onProgress: result => { if (current()) { setEmpirePlayers(result.players); setEmpireSnapshot(result); } },
                     });
-                    window.S.rosters = allRosters;
-                    window.S.leagueUsers = allUsers;
-                    window.S.myUserId = sleeperUser?.user_id;
-                    window.S.user = sleeperUser;
-                    // Fetch traded picks for all leagues in parallel
-                    const allTradedPicks = [];
-                    await Promise.allSettled(allLeaguesList.map(async l => {
-                        const lid = l.id || l.league_id;
-                        if (!lid) return;
-                        try {
-                            const tp = await fetch('https://api.sleeper.app/v1/league/' + lid + '/traded_picks').then(r => r.ok ? r.json() : []);
-                            const norm = window.App?.normalizeTradedPicks;
-                            l.tradedPicks = (norm ? norm(l.rosters || [], tp || []) : (tp || []))
-                                .map(p => ({ ...p, league_id: String(lid) }));
-                            allTradedPicks.push(...l.tradedPicks);
-                        } catch {}
-                    }));
-                    window.S.tradedPicks = allTradedPicks;
-                    // Empire mode opens no single league, so S.currentLeagueId is unset and
-                    // loadLeagueIntel() bails — DHQ player scores never populate, leaving Empire
-                    // Value 0 and every asset unvalued. Point LeagueIntel at a representative league
-                    // (mirrors the canonical league-open S setup in league-detail.js) so the Empire
-                    // gets DHQ-scale values — the documented one-league proxy (see H5 note, global-view.js).
-                    if (!window.S.currentLeagueId) {
-                        const rep = allLeaguesList.find(l => (l.rosters || []).length && (l.id || l.league_id)) || allLeaguesList[0];
-                        if (rep) {
-                            const repId = rep.id || rep.league_id;
-                            window.S.leagues = [{ league_id: repId, name: rep.name, scoring_settings: rep.scoring_settings, roster_positions: rep.roster_positions, settings: rep.settings }];
-                            window.S.currentLeagueId = repId;
-                            window.S.season = window.S.season || rep.season || String(new Date().getFullYear());
-                            // loadLeagueIntel reads S.rosters for the rep league's team count / starter pool.
-                            // The cross-league merged array (set above) is deduped by roster_id and would
-                            // give a wrong totalTeams, so point it at the rep league's own rosters.
-                            if (rep.rosters && rep.rosters.length) window.S.rosters = rep.rosters;
-                        }
-                    }
-                    // Unblock the dashboard immediately; load DHQ scores in the background and
-                    // re-render the Empire once they land (don't block the UI on the ~15s first load).
-                    setEmpirePlayersLoaded(true);
-                    if (typeof window.App?.loadLeagueIntel === 'function' && !window.App.LI_LOADED) {
-                        if (window.DhqEvents?.once) window.DhqEvents.once('li:loaded', () => setEmpireAssessReady(Date.now()));
-                        window.App.loadLeagueIntel().catch(() => {});
-                    }
-                    // Then assess every roster in the background, yielding between
-                    // leagues so a heavy or oddly-shaped league can't freeze the load.
-                    if (typeof window.App?.assessAllTeams === 'function') {
-                        (async () => {
-                            // Empire mode never populated S.playerStats, so assessments ran with no
-                            // production data → degraded health/tier. Fetch current-season stats once
-                            // (league-independent season totals) and feed them to every assessment.
-                            if ((!window.S.playerStats || !Object.keys(window.S.playerStats).length) && typeof window.fetchSeasonStats === 'function') {
-                                const season = parseInt(window.S.season || new Date().getFullYear(), 10);
-                                let st = (await window.fetchSeasonStats(String(season)).catch(() => ({}))) || {};
-                                // Offseason: the current season has no games yet — fall back to the last
-                                // completed season so dynasty health/tier reflect real production.
-                                if (!Object.keys(st).length) st = (await window.fetchSeasonStats(String(season - 1)).catch(() => ({}))) || {};
-                                window.S.playerStats = st;
-                            }
-                            const stats = window.S.playerStats || {};
-                            for (const l of allLeaguesList) {
-                                await new Promise(r => setTimeout(r, 0));
-                                const lid = l.id || l.league_id;
-                                try {
-                                    l.empireAssessments = window.App.assessAllTeams(l.rosters || [], players, stats, l, l.users || [], l.tradedPicks || []);
-                                } catch (e) { l.empireAssessments = []; }
-                                // Real Owner DNA for the moat: curated reads (od_owner_dna) take
-                                // precedence; transaction-behavioral inference fills the gaps.
-                                try {
-                                    const saved = (window.OD?.loadDNA ? await window.OD.loadDNA(lid).catch(() => ({})) : {}) || {};
-                                    const txns = (window.WrTxns?.fetchLeagueTxns ? await window.WrTxns.fetchLeagueTxns(lid).catch(() => []) : []) || [];
-                                    l.empireDna = window.App.buildEmpireDna ? window.App.buildEmpireDna(saved, txns, l.rosters || [], sleeperUser?.user_id) : saved;
-                                } catch (e) { l.empireDna = l.empireDna || {}; }
-                            }
-                            setEmpireAssessReady(Date.now());
-                        })();
-                    }
-                } catch (e) { console.warn('[Empire] Data load error:', e); setEmpirePlayersLoaded(true); }
+                } catch (error) {
+                    if (current()) setEmpireSnapshot(previous => ({ ...(previous || { leagues: [], players: {} }), status: { status: 'error', error: error.message } }));
+                    else if (alive) clearChangedPortfolio();
+                }
             })();
-        }, [proMode, empirePlayersLoaded]);
+            return () => { alive = false; };
+        }, [proMode, selectedLeague, sleeperLeagues, espnLeagues, mflLeagues, empireRetry]);
 
         if (portfolioAccountChanged) return <main style={{ padding: '48px 20px', maxWidth: '600px', margin: '0 auto', fontSize: '16px', lineHeight: 1.5 }}>
             <h1>Your account changed</h1><p>Reload to open the current account. Previous portfolio results have been cleared.</p>
@@ -1445,10 +1365,15 @@
             return (
                 <ErrorBoundary>
                     <_EmpireDash
-                        allLeagues={[...sleeperLeagues, ...visibleEspnLeagues, ...visibleMflLeagues]}
+                        allLeagues={empireSnapshot?.leagues || []}
                         playersData={empirePlayers}
+                        ownerName={customDisplayName || sleeperUser?.display_name || sleeperUser?.username || 'Commander'}
+                        portfolioCoverage={sleeperUsername ? sleeperCoverage : null}
+                        evidenceStatus={empireSnapshot?.status || { status: 'loading' }}
+                        onRetryEvidence={() => { if (!portfolioApi.current(portfolioAccount.current)) { clearChangedPortfolio(); return; } setEmpireRetry(value => value + 1); }}
                         sleeperUserId={sleeperUser?.user_id}
                         onEnterLeague={(league) => {
+                            if (!portfolioApi.current(portfolioAccount.current)) { clearChangedPortfolio(); return; }
                             handleSelectLeague(league);
                         }}
                         onBack={() => {
