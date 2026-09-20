@@ -465,26 +465,19 @@
             // Source the status-bearing MFL draft objects instead so the header
             // "Draft Live" button appears + launches straight into the live draft.
             const isMfl = !!(currentLeague?._mfl || String(leagueId).startsWith('mfl_'));
+            let mflScope;
+            try { if (isMfl) mflScope = window.App.MflDraftContext.capture(currentLeague, { isCurrent: () => !cancelled }); }
+            catch (error) { window.wrLog?.('leagueDetail.mflDraftStatus', error); setHeaderDraftInfo(null); return; }
+            const contextCurrent = () => !cancelled && (!mflScope || mflScope.isCurrent());
             const fetchDrafts = isMfl
-                ? (async () => {
-                    try {
-                        if (window.MFL?.fetchDraftStatus) {
-                            const mlid = currentLeague._mflLeagueId || String(leagueId).replace(/^mfl_/, '').replace(/_\d+$/, '');
-                            const yr = currentLeague.season || localStorage.getItem('mfl_year') || String(new Date().getFullYear());
-                            const key = sessionStorage.getItem('mfl_api_key') || null;
-                            const d = await window.MFL.fetchDraftStatus(mlid, yr, key, currentLeague);
-                            if (Array.isArray(d) && d.length) return d;
-                        }
-                    } catch (e) { window.wrLog?.('leagueDetail.mflDraftStatus', e); }
-                    return window.S?.drafts || currentLeague?.drafts || [];
-                })
+                ? () => mflScope.fetch()
                 : (window.Sleeper?.fetchDrafts || (async (lid) => {
                     const resp = await fetch('https://api.sleeper.app/v1/league/' + lid + '/drafts');
                     return resp.ok ? resp.json() : [];
                 }));
             fetchDrafts(leagueId)
                 .then(rows => {
-                    if (cancelled) return;
+                    if (!contextCurrent()) return;
                     const drafts = Array.isArray(rows) ? rows : [];
                     // Publish to the shared pocket the calendar engine reads
                     // (WrCalendar.build: window.S.drafts || currentLeague.drafts)
@@ -492,7 +485,7 @@
                     // mid-August "date TBD" placeholder while this header
                     // already knows the real Sleeper draft time (owner report
                     // 2026-08-27). Empty results never clobber hydrated data.
-                    if (drafts.length) {
+                    if (drafts.length && (!mflScope || !window.S?.currentLeagueId || String(window.S.currentLeagueId) === String(leagueId))) {
                         window.S = window.S || {};
                         window.S.drafts = drafts;
                         // Stamp the owner league so hydration keeps (not wipes)
@@ -520,9 +513,9 @@
                     const active = sel !== undefined ? (sel.draft || null) : localDraftOfRecord();
                     setHeaderDraftInfo(active);
                 })
-                .catch(() => { if (!cancelled) setHeaderDraftInfo(null); });
+                .catch(() => { if (contextCurrent()) setHeaderDraftInfo(null); });
             return () => { cancelled = true; };
-        }, [currentLeague?.league_id, currentLeague?.id]);
+        }, [currentLeague?.league_id, currentLeague?.id, currentLeague?.season, currentLeague?._mflFranchiseId]);
 
         useEffect(() => {
             if (!headerDraftInfo?.start_time || headerDraftInfo.status !== 'pre_draft') return;
