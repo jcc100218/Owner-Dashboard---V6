@@ -2,6 +2,8 @@
 
 2026-09-20. Branch `codex/public-empire-engine-20260920`, based on actual-public `d4d3540`. Production changes are confined to `js/public-empire.js` and `js/tabs/global-view.js`. No app bootstrap, canonical source, shared pin, provider data, backend or deployment was changed.
 
+Source candidate: `67cfdd6b6d00ffdc2cd855bb44c721330a24d7f2`. Deployment state: local only; independent consumer review and root integration pending.
+
 ## Reproduced and repaired
 
 **HIGH — cold Empire had no team reads, and a warm Empire reused the active league's values for other leagues.** The actual baseline coordinator required `App.LI_LOADED` and called the generic assessment API; the model priced every holding with one `input.scores` map. The regression executes `d4d3540` and demonstrates both the missing cold assessment and a foreign active value accepted for an owned holding. [Original failure and regression evidence](evidence/empire-cold-context/consumer-regression.log).
