@@ -2889,6 +2889,16 @@ WRShared.preloadMany(WR_SHARED_FILES);
     }
 </style>
 
+<style>
+.tc-pick-notice { padding:10px; margin:8px 0; border:1px solid var(--acc-line1, #685723); border-radius:6px; color:var(--silver, #ddd); font-size:14px; line-height:1.45; overflow-wrap:anywhere; }
+.tc-pick-notice button { display:block; min-height:44px; margin-top:6px; padding:6px 12px; color:var(--gold, #d4af37); background:transparent; border:1px solid currentColor; border-radius:5px; font:inherit; cursor:pointer; }
+.tc-pick-select { width:100%; min-height:44px; color:inherit; font:inherit; text-align:left; border:0; background:transparent; }
+.tc-pick-select, .tc-pick-select .tc-ta-pick-name, .tc-pick-select .tc-ta-player-val { font-size:14px; line-height:1.35; }
+.tc-pick-select .tc-ta-player-val { flex-shrink:0; max-width:48%; white-space:normal; }
+.tc-ta-side .tc-ta-remove { min-width:44px; min-height:44px; }
+.tc-ta-side .tc-ta-owner-select { min-height:44px; }
+.tc-pick-select:disabled { opacity:0.65; cursor:default; }
+</style>
 </head>
 <body>
     <!-- Static boot splash: pure HTML/CSS, visible at first paint while the JS
@@ -3014,7 +3024,8 @@ WRShared.preloadMany(WR_SHARED_FILES);
      group, when the owning surface first calls wrLoadModuleGroup('<group>'). -->
 <script src="js/module-loader.js?v=20260612modlazy1"></script>
 <script type="text/babel" src="js/settings.js?v=20260902intel1"></script>
-<script type="text/babel" data-wr-defer="trade" src="js/trade-calc.js?v=20260906b106"></script>
+<script type="text/babel" data-wr-defer="trade" src="js/trade-pick-inventory.js?v=20260920picks1"></script>
+<script type="text/babel" data-wr-defer="trade" src="js/trade-calc.js?v=20260920picks1"></script>
 <script type="text/babel" src="js/post-draft.js?v=20260907b112"></script>
 <script type="text/babel" data-wr-defer="fa" src="js/free-agency.js?v=20260915truth1"></script>
 <!-- Season Odds panel loads with Game Day (owner ruling 2026-07-30) — must
